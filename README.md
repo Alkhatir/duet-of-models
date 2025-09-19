@@ -1,1 +1,1 @@
-"# duet-of-models" 
+# duet-of-models
