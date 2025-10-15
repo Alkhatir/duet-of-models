@@ -1,0 +1,27 @@
+training:
+  batch_size: 256
+  lr: 0.001
+  seed: 42
+  val_every_step: 200
+  lr_warmup_steps: 2000
+  lr_decay_until_steps: ${.num_steps}
+  lr_decay_factor: 0.001
+  weight_decay: 0.1
+  num_steps: 20000
+  device: cuda
+  amp_precision: bfloat16
+  weight_precision: float32
+  enable_mixed_precision: true
+
+model:
+  num_blocks: 2
+  embedding_dim: 64
+  mlstm_block:
+    mlstm:
+      num_heads: 1
+  slstm_block:
+    slstm:
+      num_heads: 1
+  slstm_at: [0, 1]
+  context_length: ${dataset.kwargs.context_length}
+  vocab_size: ${dataset.kwargs.vocab_size}
