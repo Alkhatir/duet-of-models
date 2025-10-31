@@ -38,7 +38,8 @@ import statistics
 
 # Third-party
 import numpy as np  # type: ignore
-import pandas as pd  # type: ignore
+import pandas as pd
+import yaml  # type: ignore
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -47,14 +48,35 @@ except Exception:
     HAS_TQDM = False
 
 # Miditok / Miditoolkit
-from miditok import REMI, TokenizerConfig  # type: ignore
+from miditok import REMI, TokSequence, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile, Instrument  # type: ignore
 
 
 def read_midi_duration_seconds(midi: MidiFile) -> float:
-    """
-    Compute duration in seconds using tempo changes.
-    Based on integration over tempo segments.
+    """Estimate the MIDI file duration in seconds by integrating tempo segments.
+
+    The Miditoolkit `MidiFile` represents time in ticks and stores tempo
+    change events as (time, tempo) entries where `time` is a tick position.
+    This function computes the real-world duration by converting tick spans
+    between consecutive tempo change events into seconds using the
+    corresponding BPM (beats per minute) value.
+
+    Algorithm details:
+    - Determine `ticks_per_beat` from the MIDI file header.
+    - Sort tempo change events by their tick time.
+    - Compute `end_tick` as the maximum note end tick across instruments
+        (falls back to `midi.max_tick` if no notes are present).
+    - For each tempo segment (from tempo[i].time to tempo[i+1].time or
+        `end_tick` for the last segment) compute the number of beats and then
+        seconds = (60 / bpm) * beats. Sum segment seconds and return the total.
+
+    Edge cases and notes:
+    - If the file has no tempo changes, a sentinel tempo of 120 BPM at time 0
+        is used to provide a reasonable duration estimate.
+    - If a tempo segment ends at or before it starts (t1 <= t0), that segment
+        is skipped to avoid negative durations (such data would be malformed).
+    - Returns a float (seconds). If the MIDI has no time information, the
+        result may be 0.0.
     """
     ticks_per_beat = midi.ticks_per_beat
     tempos = sorted(midi.tempo_changes, key=lambda t: t.time)
@@ -78,24 +100,69 @@ def read_midi_duration_seconds(midi: MidiFile) -> float:
 
 
 def count_notes(midi: MidiFile) -> int:
+    """Return the total number of note events across all instruments.
+
+    This counts individual Note objects stored in each `Instrument` of the
+    provided `MidiFile`. It does not attempt to deduplicate overlapping
+    notes or normalize by program/track — it's a raw event count used for
+    simple round-trip equality checks.
+
+    Returns:
+        int: total note count (0 if there are no instruments/notes).
+    """
     return sum(len(inst.notes) for inst in midi.instruments)
 
 
 def count_tempos(midi: MidiFile) -> int:
+    """Return the number of tempo change events in the MIDI.
+
+    This is a quick structural metric (how many tempo events exist) used
+    to compare the original and decoded MIDIs. It simply returns the
+    length of `midi.tempo_changes`.
+    """
     return len(midi.tempo_changes)
 
 
 def count_timesigs(midi: MidiFile) -> int:
+    """Return the number of time signature change events in the MIDI.
+
+    Like `count_tempos`, this is a lightweight structural metric used to
+    compare decoded files against originals.
+    """
     return len(midi.time_signature_changes)
 
 
 def load_midi(path: Path) -> MidiFile:
+    """Load a MIDI file from disk and return a Miditoolkit MidiFile.
+
+    Args:
+        path: Path to the .mid/.midi file.
+
+    Returns:
+        MidiFile: parsed MIDI object.
+
+    Raises:
+        Any exception raised by `miditoolkit.MidiFile` will propagate. The
+        caller typically wraps this in try/except to handle corrupt files.
+    """
     return MidiFile(str(path))
 
 
 def default_grid() -> List[Dict[str, Any]]:
-    """
-    A compact but diverse grid that usually reveals a good REMI setup.
+    """Build and return a list of TokenizerConfig-style dictionaries.
+
+    The function enumerates a small but useful cross-product of common
+    tokenizer options (beat resolutions, velocity quantization bins, and
+    boolean toggles such as using chords/rests/tempos/time-signatures/and
+    program changes). Each returned dict is intended to be passed as
+    kwargs into `miditok.TokenizerConfig`.
+
+    Notes:
+    - Keep this grid compact to make experiments fast. Expand or provide a
+        `--grid-file` if you want broader sweeps.
+    - Keys are chosen to align with `miditok.TokenizerConfig` naming
+        (e.g., `num_velocities`). If you upgrade/downgrade miditok, verify
+        these names still match the library's constructor.
     """
     grids = []
     beat_res_opts = [
@@ -118,8 +185,11 @@ def default_grid() -> List[Dict[str, Any]]:
                         for uts in timesigs:
                             for up in programs:
                                 grids.append(dict(
+                                    # `beat_res` controls resolution mapping by bar ranges
                                     beat_res=br,
-                                    nb_velocities=nv,
+                                    # number of velocity bins to quantize velocities
+                                    num_velocities=nv,
+                                    # boolean toggles that enable/disable tokens
                                     use_chords=uc,
                                     use_rests=ur,
                                     use_tempos=ut,
@@ -130,27 +200,38 @@ def default_grid() -> List[Dict[str, Any]]:
 
 
 def make_tokenizer(cfg_dict: Dict[str, Any]) -> REMI:
+    """Create a REMI tokenizer from a TokenizerConfig kwargs dict.
+
+    This helper wraps the pattern `TokenizerConfig(**cfg_dict)` followed by
+    `REMI(config)` so callers only need to provide a plain dict. Any invalid
+    keys or incompatible values will raise in `TokenizerConfig`. The caller
+    should catch exceptions when constructing tokenizers for experimental
+    grids.
+
+    Args:
+        cfg_dict: mapping of TokenizerConfig parameter names to values.
+
+    Returns:
+        REMI: instantiated tokenizer ready to be called on MidiFile objects.
+    """
     config = TokenizerConfig(**cfg_dict)
     return REMI(config)
 
 
-def tokenize_file(tokenizer: REMI, midi: MidiFile) -> List[int]:
-    toks = tokenizer(midi)
-    ids = getattr(toks, "ids", None) or getattr(toks, "ids_list", None)
-    if ids is None:
-        if isinstance(toks, list) and all(isinstance(x, int) for x in toks):
-            ids = toks
-        else:
-            raise RuntimeError("Unexpected TokSequence object; couldn't extract ids.")
-    return list(ids)
-
-
-def decode_tokens(tokenizer: REMI, ids: List[int]) -> MidiFile:
-    # Miditok decode API: tokenizer.decode(ids) -> MidiFile (for REMI)
-    return tokenizer.decode(ids)  # type: ignore[return-value]
-
 
 def zscore(arr: np.ndarray) -> np.ndarray:
+    """Compute a z-score (standard score) for a 1D numpy array.
+
+    This implementation is NaN-aware (uses `nanmean`/`nanstd`) so missing
+    values don't propagate silently. If the standard deviation is effectively
+    zero, it returns an array of zeros to avoid numerical instability.
+
+    Args:
+        arr: 1D numpy array of numeric values (may contain NaNs).
+
+    Returns:
+        numpy.ndarray: z-scored values with the same shape as `arr`.
+    """
     m = np.nanmean(arr)
     s = np.nanstd(arr)
     if s < 1e-12:
@@ -159,6 +240,31 @@ def zscore(arr: np.ndarray) -> np.ndarray:
 
 
 def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
+    """Rank tokenizer configurations using z-scored metric components.
+
+    This function takes the raw-per-config metrics DataFrame produced by the
+    main loop and builds normalized components using `zscore`. It combines
+    the following (lower is better):
+
+      - tokens_per_second: proxy for verbosity/compression
+      - p95_tokens_per_file: tail length indicator
+      - note_loss_rate: average fractional note loss (only when decoding)
+      - struct_diff: mean difference in tempo + timesig counts
+      - error_rate: fraction of files that raised errors
+
+    Each component is multiplied by a weight (provided in `weights`) and
+    summed to produce a final `score` column. The DataFrame is returned
+    sorted ascending by `score` (best configurations first).
+
+    Args:
+        df: DataFrame containing the required metric columns.
+        weights: mapping of weight names to floats; missing entries use
+                 reasonable defaults.
+
+    Returns:
+        DataFrame: a copy of `df` with an added `score` column, sorted by
+                   ascending score.
+    """
     # Build components
     comp = {}
     # Lower is better for all used components
@@ -182,6 +288,24 @@ def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
 
 
 def main():
+    """CLI entrypoint: sweep tokenizer configs, evaluate and rank them.
+
+    This function parses command-line arguments, loads a sample of MIDI files
+    from `--input` (up to `--max-files`), precomputes baseline features
+    (notes, tempo/time signature counts, duration), then iterates over the
+    configuration grid. For each config it attempts to construct a REMI
+    tokenizer, tokenize each MIDI and optionally decode back to MIDI to
+    compute structural/quality metrics. The per-config metrics are saved to
+    CSV and the best configuration is written to `best_config.json`.
+
+    Error handling and behavior notes:
+    - If a tokenizer construction fails for a given config, that config is
+        recorded with `error_rate=1.0` and NaNs for other metrics.
+    - Tokenization/decoding errors on individual files increment an error
+        counter; decoding failures are penalized via large default diffs.
+    - The function writes output files in `--outdir` and prints the path
+        when finished.
+    """
     p = argparse.ArgumentParser(description="Auto-tune Miditok REMI configs for a MIDI dataset.")
     p.add_argument("--input", type=Path, required=True, help="Folder with .mid/.midi files")
     p.add_argument("--extensions", nargs="+", default=[".mid", ".midi"], help="File extensions")
@@ -257,7 +381,7 @@ def main():
         from tqdm import tqdm  # type: ignore
         grid_iter = tqdm(grid, desc="Configs")
 
-    for cfg in grid_iter:
+    for i, cfg in enumerate(grid_iter):
         # Tokenize all, collect metrics
         tok_lens: List[int] = []
         errs = 0
@@ -269,19 +393,28 @@ def main():
             tokenizer = make_tokenizer(cfg)
         except Exception:
             print(f"[WARN] Bad tokenizer config {cfg}:\n{traceback.format_exc()}")
-            rows.append(dict(config=json.dumps(cfg), error_rate=1.0, tokens_per_second=np.nan,
+            args.outdir.joinpath("tokenization_configs_errors").mkdir(parents=True, exist_ok=True)
+            yaml.dump(cfg, encoding="utf-8", stream=open(f"{args.outdir}/tokenization_configs_errors/{i}.yaml", "w"))
+            rows.append(dict(id=i, error_rate=1.0, tokens_per_second=np.nan,
                              median_tokens_per_file=np.nan, p95_tokens_per_file=np.nan,
                              note_loss_rate=np.nan, tempo_diff=np.nan, timesig_diff=np.nan))
             continue
 
         for (path, midi), orig in zip(dataset_midis, origins):
             try:
-                ids = tokenize_file(tokenizer, midi)
-                tok_lens.append(len(ids))
+                toks = tokenizer(midi)
+                total_length = 0
+                if isinstance(toks, list):
+                    for track in toks:
+                        total_length += len(track)
+                else:
+                    total_length = len(toks)
+
+                tok_lens.append(total_length)
 
                 if not args.no_decode:
                     try:
-                        dec = decode_tokens(tokenizer, ids)
+                        dec = tokenizer(toks)
                         n_loss = abs(count_notes(dec) - orig["notes"]) / max(1, orig["notes"])
                         t_diff = abs(count_tempos(dec) - orig["tempos"])
                         s_diff = abs(count_timesigs(dec) - orig["timesigs"])
@@ -307,9 +440,10 @@ def main():
             tokens_per_second = total_tokens / max(1e-9, total_seconds)
             med = float(statistics.median(tok_lens))
             p95 = float(np.percentile(tok_lens, 95))
-
+        args.outdir.joinpath("tokenization_configs").mkdir(parents=True, exist_ok=True)
+        yaml.dump(cfg, encoding="utf-8", stream=open(f"{args.outdir}/tokenization_configs/{i}.yaml", "w"))
         row = dict(
-            config=json.dumps(cfg),
+            id=i,
             error_rate=errs / len(dataset_midis),
             tokens_per_second=tokens_per_second,
             median_tokens_per_file=med,
@@ -334,9 +468,7 @@ def main():
 
     # Save best config
     if len(ranked) > 0:
-        best = json.loads(ranked.iloc[0]["config"])
-        with open(args.outdir / "best_config.json", "w", encoding="utf-8") as f:
-            json.dump(best, f, ensure_ascii=False, indent=2)
+        print("Best config (lowest score):", int(ranked.iloc[0]["id"]))
 
     # Also drop a quick README
     (args.outdir / "README.md").write_text(
