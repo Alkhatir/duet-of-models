@@ -1,16 +1,11 @@
 # pip install pretty_midi numpy dtw-python scikit-learn
 
+from collections import defaultdict
 import numpy as np
 import pretty_midi
 from dtw import dtw
 from numpy.linalg import norm
-
-try:
-    from sklearn.metrics import precision_recall_fscore_support
-
-    _HAS_SK = True
-except Exception:
-    _HAS_SK = False
+from sklearn.metrics import precision_recall_fscore_support
 
 
 # ---------- helpers ----------
@@ -36,8 +31,6 @@ def _onset_median_durations(
         times_sorted: np.array of unique onset times (keys)
         med_durs: np.array of median durations aligned with times_sorted
     """
-    from collections import defaultdict
-
     buckets = defaultdict(list)
     for inst in pm.instruments:
         if (not include_drums) and inst.is_drum:
@@ -110,7 +103,7 @@ def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=F
     I dont think the folloing code block is needed for tokenization setting since the tokenizer should not do a pitch shift.
     Nontheless, I could be handy as a metric for evaluating the models after training to see if they learned harmony in some way.
     """
-    if transpose_invariant: 
+    if transpose_invariant:
         for k in range(1, 12):
             best = min(best, one(A, np.roll(B, k, axis=1)))
     return best
