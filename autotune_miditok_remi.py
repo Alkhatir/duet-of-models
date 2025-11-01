@@ -50,6 +50,7 @@ except Exception:
 # Miditok / Miditoolkit
 from miditok import REMI, TokSequence, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile, Instrument  # type: ignore
+from metrics_onset import midi_roundtrip_metrics_onset_chroma
 
 
 def read_midi_duration_seconds(midi: MidiFile) -> float:
@@ -388,6 +389,7 @@ def main():
         note_losses = []
         tempo_diffs = []
         timesig_diffs = []
+        
 
         try:
             tokenizer = make_tokenizer(cfg)
