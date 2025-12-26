@@ -499,7 +499,9 @@ def main():
                             reconstructed_mid=dec_pretty,
                             onset_tol=0.03,
                             include_drums=True,
-                            fs_chroma=150,
+                            fs_chroma=2,
+                            calculate_transpose_inveriant_chroma=False,
+                            max_len_s=None,
                         )
                         prescisions.append(onset_metrics["precision"])
                         recalls.append(onset_metrics["recall"])
