@@ -71,21 +71,28 @@ def _match_onsets(ref_times, hyp_times, tol=0.03):
 
 
 def _pm_chroma(pm: pretty_midi.PrettyMIDI, fs=100, include_drums=False):
-    """
-    Sum instrument chroma across (non-drum) instruments using get_chroma.
-    """
-    chroma_sum = None
+    Cs = []
     for inst in pm.instruments:
         if (not include_drums) and inst.is_drum:
             continue
         C = inst.get_chroma(fs=fs)  # (12, T)
-        chroma_sum = C if chroma_sum is None else chroma_sum + C
-    if chroma_sum is None:
+        if C.size:
+            Cs.append(C.astype(np.float32))
+
+    if not Cs:
         return np.zeros((12, 0), dtype=np.float32)
-    # L2-normalize each frame to reduce loudness bias
+
+    # Make all chroma have the same T (pad to the max length)
+    T = max(C.shape[1] for C in Cs)
+    chroma_sum = np.zeros((12, T), dtype=np.float32)
+    for C in Cs:
+        chroma_sum[:, :C.shape[1]] += C  # pad remainder with zeros
+
+    # L2-normalize each frame
     eps = 1e-12
     norms = norm(chroma_sum, axis=0) + eps
     return chroma_sum / norms
+
 
 
 def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=False):
@@ -95,8 +102,11 @@ def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=F
         return float("inf")
 
     def one(X, Y):
-        d, _, _, _ = dtw(X, Y, dist=lambda x, y: norm(x - y))
-        return float(d)
+        # dtw-python expects the distance callback under the dist_method keyword
+        # ("dist" is not a valid argument). The call returns a DTW object whose
+        # ``distance`` attribute holds the accumulated cost we need.
+        res = dtw(X, Y, dist=lambda x, y: norm(x - y))
+        return float(res.distance)
 
     best = one(A, B)
     """
@@ -117,12 +127,41 @@ def midi_roundtrip_metrics_onset_chroma(
     Precision/Recall/F1 on *onset events*; MAE on onset time; MAE on median durations per onset;
     transpose-invariant chroma DTW.
     """
-    pm_ref = pretty_midi.PrettyMIDI(original_mid)
-    pm_hyp = pretty_midi.PrettyMIDI(reconstructed_mid)
+    pm_ref = (
+        original_mid
+        if isinstance(original_mid, pretty_midi.PrettyMIDI)
+        else pretty_midi.PrettyMIDI(original_mid)
+    )
+    pm_hyp = (
+        reconstructed_mid
+        if isinstance(reconstructed_mid, pretty_midi.PrettyMIDI)
+        else pretty_midi.PrettyMIDI(reconstructed_mid)
+    )
 
     # Onset arrays (deduped)
     ref_on = _collect_onsets(pm_ref, include_drums)
     hyp_on = _collect_onsets(pm_hyp, include_drums)
+
+    if len(ref_on) == 0 and len(hyp_on) == 0:
+        # Nothing to compare; return neutral precision/recall/F1 and leave MAEs undefined
+        chroma_score = chroma_dtw(
+            pm_ref,
+            pm_hyp,
+            fs=fs_chroma,
+            transpose_invariant=True,
+            include_drums=include_drums,
+        )
+        chroma_score = float(chroma_score)
+        if not np.isfinite(chroma_score):
+            chroma_score = float("nan")
+        return {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "onset_mae_sec": None,
+            "dur_mae_sec": None,
+            "chroma_dtw": chroma_score,
+        }
 
     # Match onsets within tolerance
     pairs, tp, fp, fn = _match_onsets(ref_on, hyp_on, tol=onset_tol)
@@ -131,9 +170,12 @@ def midi_roundtrip_metrics_onset_chroma(
 
     y_true = np.r_[np.ones(tp), np.ones(fn), np.zeros(fp)]
     y_pred = np.r_[np.ones(tp), np.zeros(fn), np.ones(fp)]
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        y_true, y_pred, average="binary", zero_division=0
-    )
+    if y_true.size == 0:
+        precision = recall = f1 = 0.0
+    else:
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_true, y_pred, average="binary", zero_division=0
+        )
 
     # onset MAE over matched pairs
     onset_errs = [abs(hyp_on[j] - ref_on[i]) for i, j in pairs]
@@ -166,6 +208,9 @@ def midi_roundtrip_metrics_onset_chroma(
         transpose_invariant=True,
         include_drums=include_drums,
     )
+    chroma_dtw_score = float(chroma_dtw_score)
+    if not np.isfinite(chroma_dtw_score):
+        chroma_dtw_score = float("nan")
 
     return {
         "precision": float(precision),
