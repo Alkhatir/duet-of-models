@@ -1,6 +1,8 @@
 # pip install pretty_midi numpy dtw-python scikit-learn
+from __future__ import annotations
 
 from collections import defaultdict
+from typing import Optional, Tuple
 import numpy as np
 import pretty_midi
 from dtw import dtw
@@ -93,11 +95,43 @@ def _pm_chroma(pm: pretty_midi.PrettyMIDI, fs=100, include_drums=False):
     norms = norm(chroma_sum, axis=0) + eps
     return chroma_sum / norms
 
+def _slice_pianoroll_window(
+    pr: np.ndarray,
+    fs: float,
+    start_s: float = 0.0,
+    max_len_s: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Slice a pianoroll-like array (T, D) by time window in seconds.
+    Keeps rows in [start_s, start_s + max_len_s).
+    """
+    if pr.ndim != 2:
+        raise ValueError(f"Expected 2D array (T, D); got shape {pr.shape}")
+
+    T = pr.shape[0]
+    start_idx = int(round(start_s * fs))
+    start_idx = max(0, min(start_idx, T))
+
+    if max_len_s is None:
+        end_idx = T
+    else:
+        end_idx = start_idx + int(round(max_len_s * fs))
+        end_idx = max(start_idx, min(end_idx, T))
+
+    return pr[start_idx:end_idx, :]
 
 
-def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=False):
+def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant:bool=True, include_drums=False,
+    start_s: float = 0.0, 
+    max_len_s: Optional[float] = None):
+
     A = _pm_chroma(pm_ref, fs=fs, include_drums=include_drums).T  # (T, 12)
     B = _pm_chroma(pm_hyp, fs=fs, include_drums=include_drums).T  # (T, 12)
+
+    # Apply the same time windowing to both sequences
+    A = _slice_pianoroll_window(A, fs=fs, start_s=start_s, max_len_s=max_len_s)
+    B = _slice_pianoroll_window(B, fs=fs, start_s=start_s, max_len_s=max_len_s)
+
     if A.size == 0 or B.size == 0:
         return float("inf")
 
@@ -105,13 +139,13 @@ def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=F
         # dtw-python expects the distance callback under the dist_method keyword
         # ("dist" is not a valid argument). The call returns a DTW object whose
         # ``distance`` attribute holds the accumulated cost we need.
-        res = dtw(X, Y, dist=lambda x, y: norm(x - y))
+        res = dtw(X, Y, dist_method=lambda x, y: norm(x - y))
         return float(res.distance)
 
     best = one(A, B)
     """
     I dont think the folloing code block is needed for tokenization setting since the tokenizer should not do a pitch shift.
-    Nontheless, I could be handy as a metric for evaluating the models after training to see if they learned harmony in some way.
+    Nontheless, It could be handy as a metric for evaluating the models after training to see if they learned harmony in some way.
     """
     if transpose_invariant:
         for k in range(1, 12):
@@ -121,7 +155,7 @@ def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant=True, include_drums=F
 
 # ---------- main ----------
 def midi_roundtrip_metrics_onset_chroma(
-    original_mid, reconstructed_mid, onset_tol=0.03, include_drums=False, fs_chroma=100
+    original_mid, reconstructed_mid, onset_tol=0.03, include_drums=False, fs_chroma=100, calculate_transpose_inveriant_chroma:bool=True, max_len_s: Optional[float] = None, start_s=0.0 # (optional) start offset
 ):
     """
     Precision/Recall/F1 on *onset events*; MAE on onset time; MAE on median durations per onset;
@@ -148,8 +182,10 @@ def midi_roundtrip_metrics_onset_chroma(
             pm_ref,
             pm_hyp,
             fs=fs_chroma,
-            transpose_invariant=True,
+            transpose_invariant=calculate_transpose_inveriant_chroma,
             include_drums=include_drums,
+            start_s=start_s,
+            max_len_s=max_len_s,
         )
         chroma_score = float(chroma_score)
         if not np.isfinite(chroma_score):
