@@ -528,7 +528,7 @@ def main():
                     except Exception as e:
                         # If decode fails, count as a full error for that item
                         n_loss, t_diff, s_diff = 1.0, 5.0, 5.0
-                        print('exception accured line 527 for the file: ', path,'\n', str(e))
+                        print('exception occurred line 527 for the file: ', path, '\n', str(e))
                     note_losses.append(n_loss)
                     tempo_diffs.append(t_diff)
                     timesig_diffs.append(s_diff)
