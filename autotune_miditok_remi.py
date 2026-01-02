@@ -521,8 +521,8 @@ def main():
                             else np.nan
                         )
                         chroma_dtw_scores.append(
-                            onset_metrics["chroma_dtw_score"]
-                            if onset_metrics["chroma_dtw_score"] is not None
+                            onset_metrics["chroma_dtw"]
+                            if onset_metrics["chroma_dtw"] is not None
                             else np.nan
                         )
                     except Exception as e:
