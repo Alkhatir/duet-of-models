@@ -155,7 +155,7 @@ def chroma_dtw(pm_ref, pm_hyp, fs=100, transpose_invariant:bool=True, include_dr
 
 # ---------- main ----------
 def midi_roundtrip_metrics_onset_chroma(
-    original_mid, reconstructed_mid, onset_tol=0.03, include_drums=False, fs_chroma=100, calculate_transpose_inveriant_chroma:bool=True, max_len_s: Optional[float] = None, start_s=0.0 # (optional) start offset
+    original_mid, reconstructed_mid, onset_tol=0.03, include_drums=False, fs_chroma=100, calculate_transpose_invariant_chroma: bool = True, max_len_s: Optional[float] = None, start_s=0.0 # (optional) start offset
 ):
     """
     Precision/Recall/F1 on *onset events*; MAE on onset time; MAE on median durations per onset;
