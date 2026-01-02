@@ -14,4 +14,5 @@ dependencies = [
     "pretty-midi>=0.2.11",
     "dtw-python>=1.7.2",
     "scikit-learn>=1.7.2",
+    "jupyter>=1.1.1",
 ]
