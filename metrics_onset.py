@@ -182,7 +182,7 @@ def midi_roundtrip_metrics_onset_chroma(
             pm_ref,
             pm_hyp,
             fs=fs_chroma,
-            transpose_invariant=calculate_transpose_inveriant_chroma,
+            transpose_invariant=calculate_transpose_invariant_chroma,
             include_drums=include_drums,
             start_s=start_s,
             max_len_s=max_len_s,

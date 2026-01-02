@@ -444,7 +444,7 @@ def main():
         note_losses = []
         tempo_diffs = []
         timesig_diffs = []
-        prescisions = []
+        precisions = []
         recalls = []
         f1s = []
         onset_mae_secs = []
@@ -504,20 +504,20 @@ def main():
                             onset_tol=0.03,
                             include_drums=True,
                             fs_chroma=2,
-                            calculate_transpose_inveriant_chroma=False,
+                            calculate_transpose_invariant_chroma=False,
                             max_len_s=None,
                         )
-                        prescisions.append(onset_metrics["precision"])
+                        precisions.append(onset_metrics["precision"])
                         recalls.append(onset_metrics["recall"])
                         f1s.append(onset_metrics["f1"])
                         onset_mae_secs.append(
-                            onset_metrics["onset_mae"]
-                            if onset_metrics["onset_mae"] is not None
+                            onset_metrics["onset_mae_sec"]
+                            if onset_metrics["onset_mae_sec"] is not None
                             else np.nan
                         )
                         dur_mae_secs.append(
-                            onset_metrics["dur_mae"]
-                            if onset_metrics["dur_mae"] is not None
+                            onset_metrics["dur_mae_sec"]
+                            if onset_metrics["dur_mae_sec"] is not None
                             else np.nan
                         )
                         chroma_dtw_scores.append(
@@ -557,7 +557,7 @@ def main():
             chroma_dtw_score = (
                 float(np.mean(chroma_dtw_scores)) if chroma_dtw_scores else np.nan
             )
-            prescision = float(np.mean(prescisions)) if prescisions else np.nan
+            prescision = float(np.mean(precisions)) if precisions else np.nan
             recall = float(np.mean(recalls)) if recalls else np.nan
             f1 = float(np.mean(f1s)) if f1s else np.nan
             onset_mae_sec = float(np.mean(onset_mae_secs)) if onset_mae_secs else np.nan
