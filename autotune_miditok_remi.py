@@ -27,7 +27,7 @@ Outputs:
 - debug/ per-config logs (optional)
 """
 from __future__ import annotations
-from io import BytesIO
+import os, tempfile
 import argparse
 import json
 from pathlib import Path
@@ -103,7 +103,7 @@ def read_midi_duration_seconds(midi: MidiFile) -> float:
     return float(sum(segments))
 
 
-def count_notes(midi: MidiFile) -> int:
+def count_notes(midi) -> int:
     """Return the total number of note events across all instruments.
 
     This counts individual Note objects stored in each `Instrument` of the
@@ -117,22 +117,28 @@ def count_notes(midi: MidiFile) -> int:
     return sum(len(inst.notes) for inst in midi.instruments)
 
 
-def count_tempos(midi: MidiFile) -> int:
+def count_tempos(midi) -> int:
     """Return the number of tempo change events in the MIDI.
 
     This is a quick structural metric (how many tempo events exist) used
     to compare the original and decoded MIDIs. It simply returns the
     length of `midi.tempo_changes`.
     """
+    if isinstance(midi, PrettyMIDI):
+        times, tempi = midi.get_tempo_changes()
+        return len(tempi)
     return len(midi.tempo_changes)
 
 
-def count_timesigs(midi: MidiFile) -> int:
+def count_timesigs(midi) -> int:
     """Return the number of time signature change events in the MIDI.
 
     Like `count_tempos`, this is a lightweight structural metric used to
     compare decoded files against originals.
     """
+    if isinstance(midi, PrettyMIDI):
+        return len(midi.time_signature_changes)
+
     return len(midi.time_signature_changes)
 
 
@@ -340,7 +346,7 @@ def main():
     )
     p.add_argument(
         "--no-decode",
-        action="store_true",
+        action="store_false",
         help="Skip round-trip decoding metrics (faster)",
     )
     p.add_argument(
@@ -430,7 +436,7 @@ def main():
     grid_iter = grid
     if HAS_TQDM:
         grid_iter = tqdm(grid, desc="Configs")
-
+    f = tempfile.NamedTemporaryFile(suffix=".mid", delete=False) # For storing decoded MIDIs temporarily
     for i, cfg in enumerate(grid_iter):
         # Tokenize all, collect metrics
         tok_lens: List[int] = []
@@ -469,7 +475,7 @@ def main():
                 )
             )
             continue
-
+        
         for (path, midi), orig in zip(dataset_midis, origins):
             try:
                 toks = tokenizer(midi)
@@ -484,16 +490,14 @@ def main():
 
                 if not args.no_decode:
                     try:
-                        dec = tokenizer(toks)
-                        buf = BytesIO()
-                        dec.dump(file=buf)
-                        buf.seek(0)
-                        dec_pretty = PrettyMIDI(buf)
-                        n_loss = abs(count_notes(dec) - orig["notes"]) / max(
+                        dec = tokenizer.decode(toks)
+                        dumped_midi = dec.dump_midi(f.name)
+                        dec_pretty = PrettyMIDI(dumped_midi)
+                        n_loss = abs(count_notes(dec_pretty) - orig["notes"]) / max(
                             1, orig["notes"]
                         )
-                        t_diff = abs(count_tempos(dec) - orig["tempos"])
-                        s_diff = abs(count_timesigs(dec) - orig["timesigs"])
+                        t_diff = abs(count_tempos(dec_pretty) - orig["tempos"])
+                        s_diff = abs(count_timesigs(dec_pretty) - orig["timesigs"])
                         onset_metrics = midi_roundtrip_metrics_onset_chroma(
                             original_mid=PrettyMIDI(str(path)),
                             reconstructed_mid=dec_pretty,
@@ -521,9 +525,10 @@ def main():
                             if onset_metrics["chroma_dtw_score"] is not None
                             else np.nan
                         )
-                    except Exception:
+                    except Exception as e:
                         # If decode fails, count as a full error for that item
                         n_loss, t_diff, s_diff = 1.0, 5.0, 5.0
+                        print('exception accured line 527 for the file: ', path,'\n', str(e))
                     note_losses.append(n_loss)
                     tempo_diffs.append(t_diff)
                     timesig_diffs.append(s_diff)
