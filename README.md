@@ -12,6 +12,7 @@ This project uses three separate `uv` environments:
 
 ```bash
 scripts/bootstrap_envs.sh
+scripts/check_envs.sh
 ```
 
 Or sync individually:
@@ -46,12 +47,7 @@ scripts/train_xlstm.sh <config_path>
 scripts/eval_all.sh <data_dir> <out_dir>
 ```
 
-Backward-compatible entry scripts remain at project root:
-- `preprocessing.py`
-- `tokenization.py`
-- `train_transformer.py`
-- `train_xlstm.py`
-- `metrics_onset.py`
+Module entrypoints are used directly from `src/` (no root-level wrappers).
 
 ## Project Structure
 
