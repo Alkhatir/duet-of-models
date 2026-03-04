@@ -1,0 +1,12 @@
+[project]
+name = "duet-of-models-xlstm-env"
+version = "0.1.0"
+description = "xLSTM training environment for duet-of-models."
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2.0",
+  "omegaconf>=2.3.0",
+  "dacite>=1.8.1",
+  "tqdm>=4.66",
+  "xlstm",
+]

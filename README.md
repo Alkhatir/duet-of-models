@@ -1,75 +1,126 @@
 # duet-of-models
-This repository contains tooling for preparing MIDI datasets and tokenizer configurations for duet-model experiments. It includes:
 
-- **`preprocessing.py`**: a command-line pipeline for cleaning raw MIDI files. It maps drum pitches, trims empty tracks, filters files that are too short, deduplicates MIDIs based on a quantized signature, and writes cleaned outputs alongside optional manifest and deduplication indexes.
-- **`tokenization.py`**: a builder for MidiTok YAML configs. It exposes every tokenizer option, adds tokenizer-specific extras (e.g., REMI bar tokens, MIDILike max duration, MMM density bins, PerTok microtiming controls), validates compatibility, and can scan MIDI folders to populate configuration values.
-- **`utils.py`**: shared utilities, currently providing recursive MIDI discovery used by both the preprocessing and tokenization scripts.
-- **Configuration files** in `configs/` for reference tokenizers and model settings, including a REMI tokenizer YAML and an xLSTM model preset.
-- **Notebooks** for exploratory work (`data_exploring.ipynb`) and MIDI reproduction experiments (`reproducing_midi.ipynb`).
+Repository for running controlled experiments on simplified GPT-2 and xLSTM models for symbolic music generation.
 
-## Installation with `uv`
+## Setup
 
-`uv` can create and manage the project virtual environment from the provided `pyproject.toml` and `uv.lock` files. To install dependencies:
+This project uses three separate `uv` environments:
 
-```bash
-uv sync
-```
-
-This will create a `.venv` folder and install all locked packages. To run project tools without activating the environment explicitly, prefix commands with `uv run`:
+- `envs/data` for preprocessing, tokenization, and evaluation
+- `envs/gpt2` for transformer training
+- `envs/xlstm` for xLSTM training
 
 ```bash
-uv run python preprocessing.py --help
-uv run python tokenization.py --help
+scripts/bootstrap_envs.sh
 ```
 
-## Preprocessing pipeline
-
-The cleaning script focuses on light sanitation while leaving quantization and velocity handling to the tokenizer. Key steps include:
-
-1. Load each MIDI file with `miditoolkit`.
-2. Optionally remap drum pitches to coarse classes (or keep originals).
-3. Trim empty instruments and filter out files with too few notes or bars.
-4. Compute a PPQ-independent signature for deduplication based on quantized note tuples.
-5. Write cleaned MIDIs, append manifest entries, and optionally save dedupe indexes.
-
-Example usage cleaning a dataset and writing a manifest:
+Or sync individually:
 
 ```bash
-uv run python preprocessing.py \
-  --in /path/to/raw_midis \
-  --out ./clean_midis \
-  --write-manifest ./manifests/clean.jsonl \
-  --dedupe-index ./manifests/dedupe.json
+uv sync --project envs/data
+uv sync --project envs/gpt2
+uv sync --project envs/xlstm
 ```
 
-Use `--save-config` or `--load-config` to persist or reuse capture settings such as drum mapping, dedupe behavior, and minimum file size thresholds.
+## Core Workflow
 
-## Tokenizer configuration builder
+1. Preprocess MIDI data.
+2. Build/freeze tokenizer config.
+3. Train GPT-2 and xLSTM with comparable settings.
+4. Evaluate generated MIDI with shared metrics.
+5. Store all run artifacts under `experiments/<date>-<run_name>/`.
 
-`tokenization.py` helps assemble MidiTok tokenizer YAML files without manually editing long dictionaries. Highlights:
-
-- Supports REMI, MIDILike, TSD, Structured, CPWord, Octuple, MuMIDI, MMM, and PerTok tokenizers.
-- Stores the full `TokenizerConfig` fields with sensible defaults and allows overriding via CLI or YAML.
-- Provides tokenizer-specific extras such as bar embeddings for REMI, max duration for MIDILike, density bins for MMM, and microtiming options for PerTok.
-- Can iterate over MIDI folders (using `iter_midi_paths`) to derive useful metadata when populating configs.
-
-Generate or edit a tokenizer config by running:
+## Commands
 
 ```bash
-uv run python tokenization.py --help
+# data preprocessing
+scripts/preprocess_data.sh <input_dir> <output_dir>
+
+# GPT-2 training
+scripts/train_gpt2.sh <data_dir> <model_cfg> <tokenizer_cfg>
+
+# xLSTM training
+scripts/train_xlstm.sh <config_path>
+
+# evaluation sweep (tokenizer + round-trip metrics)
+scripts/eval_all.sh <data_dir> <out_dir>
 ```
 
-The generated YAML files can be saved alongside preprocessing configs for reproducibility.
+Backward-compatible entry scripts remain at project root:
+- `preprocessing.py`
+- `tokenization.py`
+- `train_transformer.py`
+- `train_xlstm.py`
+- `metrics_onset.py`
 
-## Project structure
+## Project Structure
 
-- `configs/preprocessing/tokenizer_config.yaml`: Example REMI tokenizer configuration produced by the builder.
-- `configs/models/xlstm/1.yaml`: Example model hyperparameters for an xLSTM variant.
-- `data_reports/`: Space for generated reports or manifests.
-- `data_exploring.ipynb`, `reproducing_midi.ipynb`: Jupyter notebooks for analysis and experimentation.
+```text
+duet-of-models/
+  README.md
+  pyproject.toml
+  uv.lock
 
-## Development notes
+  envs/
+    data/
+      pyproject.toml
+    gpt2/
+      pyproject.toml
+    xlstm/
+      pyproject.toml
 
-- The scripts target Python 3.10+.
-- Dependencies are managed through `uv` using `pyproject.toml` and `uv.lock` for reproducible environments.
-- To add new packages, run `uv add <package>` and commit the updated lockfile.
+  configs/
+    model/
+      gpt2/
+      xlstm/
+    data/
+      tokenizer_config.yaml
+      maestro.yaml
+    train/
+      base.yaml
+    eval/
+      music_metrics.yaml
+    experiment/
+      gpt2_baseline.yaml
+      xlstm_baseline.yaml
+
+  src/
+    data/
+      midi_preprocess.py
+      tokenizer.py
+    models/
+      gpt2/
+        train.py
+      xlstm/
+        train.py
+    evaluation/
+      music_metrics.py
+    training/
+    utils/
+      midi_utils.py
+
+  scripts/
+    preprocess_data.sh
+    train_gpt2.sh
+    train_xlstm.sh
+    eval_all.sh
+    autotune_miditok_remi.py
+
+  experiments/
+    .templates/
+
+  docs/
+    environments.md
+    experiment_protocol.md
+    metric_definitions.md
+
+  tests/
+    test_metrics_smoke.py
+```
+
+## Notes
+
+- Shared code lives under `src/`; model-specific code is isolated in `src/models/gpt2` and `src/models/xlstm`.
+- Evaluation logic is centralized in `src/evaluation/music_metrics.py` so both models are scored consistently.
+- Runtime dependencies are isolated per workflow in `envs/*/pyproject.toml`.
+- Existing notebooks and `data_reports/` are kept for exploration and analysis.

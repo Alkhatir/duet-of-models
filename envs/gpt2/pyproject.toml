@@ -1,0 +1,15 @@
+[project]
+name = "duet-of-models-gpt2-env"
+version = "0.1.0"
+description = "GPT-2 training environment for duet-of-models."
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2.0",
+  "transformers>=4.45.0",
+  "omegaconf>=2.3.0",
+  "wandb>=0.19.0",
+  "miditoolkit>=0.1.16",
+  "miditok>=3.0.0",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+]

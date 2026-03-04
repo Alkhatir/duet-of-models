@@ -1,0 +1,4 @@
+onset_tolerance_sec: 0.03
+include_drums: false
+chroma_fs: 100
+transpose_invariant: true
