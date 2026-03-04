@@ -6,7 +6,7 @@ DATA_DIR="${1:-data/lmd_matched}"
 MODEL_CFG="${2:-configs/model/gpt2/nano.yaml}"
 TOKENIZER_CFG="${3:-configs/data/tokenizer_config.yaml}"
 
-uv run --project envs/gpt2 python train_transformer.py \
+uv run --project envs/gpt2 python -m src.models.gpt2.train \
   --cfg "$MODEL_CFG" \
   --tok_cfg "$TOKENIZER_CFG" \
   --data_dir "$DATA_DIR"

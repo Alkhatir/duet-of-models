@@ -5,7 +5,7 @@ set -euo pipefail
 INPUT_DIR="${1:-data/raw}"
 OUTPUT_DIR="${2:-data/clean}"
 
-uv run --project envs/data python preprocessing.py \
+uv run --project envs/data python -m src.data.midi_preprocess \
   --in "$INPUT_DIR" \
   --out "$OUTPUT_DIR" \
   --save-config configs/data/capture.yaml \
