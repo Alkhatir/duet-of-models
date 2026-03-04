@@ -20,13 +20,19 @@ Or run all three:
 scripts/bootstrap_envs.sh
 ```
 
+Smoke-check all environments:
+
+```bash
+scripts/check_envs.sh
+```
+
 ## Run commands by environment
 
 ```bash
-uv run --project envs/data python preprocessing.py --help
-uv run --project envs/data python tokenization.py --help
-uv run --project envs/gpt2 python train_transformer.py --help
-uv run --project envs/xlstm python train_xlstm.py --help
+uv run --project envs/data python -m src.data.midi_preprocess --help
+uv run --project envs/data python -m src.data.tokenizer --help
+uv run --project envs/gpt2 python -m src.models.gpt2.train --help
+uv run --project envs/xlstm python -m src.models.xlstm.train --help
 ```
 
 ## Notes
