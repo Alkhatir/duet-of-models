@@ -1,22 +1,7 @@
-from miditok.utils import split_files_for_training
-from miditok.pytorch_data import DatasetMIDI, DataCollator
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable, List
-
-import math
-from transformers import TrainerCallback
-
-
-class PerplexityCallback(TrainerCallback):
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs and "eval_loss" in logs:
-            logs["eval_perplexity"] = math.exp(
-                min(20.0, logs["eval_loss"])
-            )  # clip to avoid inf
-        if logs and "loss" in logs:  # training PPL (approx; noisy)
-            logs["train_perplexity"] = math.exp(min(20.0, logs["loss"]))
-
 
 def iter_midi_paths(root: Path) -> Iterable[Path]:
     """Yield all .mid/.midi files under a root directory recursively."""
@@ -37,6 +22,8 @@ def chunk_split(
     Returns paths to the chunked files saved in save_dir.
     Can be called repeatedly; it's cached by a hidden hash file.
     """
+    from miditok.utils import split_files_for_training
+
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     chunk_paths = split_files_for_training(
         files_paths=paths,
@@ -73,6 +60,8 @@ def build_three_datasets_from_chunks(
             - test_ds (DatasetMIDI): The test dataset.
             - collator (DataCollator): The data collator for padding and label shifting.
     """
+    from miditok.pytorch_data import DatasetMIDI, DataCollator
+
     train_chunks = chunk_split(train_src, tokenizer, "cache_chunks/train", max_seq_len)
     val_chunks = chunk_split(val_src, tokenizer, "cache_chunks/val", max_seq_len)
     test_chunks = chunk_split(test_src, tokenizer, "cache_chunks/test", max_seq_len)
