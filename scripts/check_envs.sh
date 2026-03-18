@@ -15,6 +15,7 @@ fi
 
 commands=(
   "$UV_BIN run --project envs/data python -m src.data.midi_preprocess --help"
+  "$UV_BIN run --project envs/data python -m src.data.sample_midi_subset --help"
   "$UV_BIN run --project envs/data python -m src.data.tokenizer --help"
   "$UV_BIN run --project envs/gpt2 python -m src.models.gpt2.train --help"
   "$UV_BIN run --project envs/xlstm python -m src.models.xlstm.train --help"
