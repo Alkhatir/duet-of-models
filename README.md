@@ -34,8 +34,11 @@ uv sync --project envs/xlstm
 ## Commands
 
 ```bash
+# representative subset sampling (recommended before preprocess on huge corpora)
+scripts/sample_subset.sh <data_dir> <n> <out_list> [seed] [jobs]
+
 # data preprocessing
-scripts/preprocess_data.sh <input_dir> <output_dir>
+scripts/preprocess_data.sh <input_dir> <output_dir> [input_list] [jobs]
 
 # GPT-2 training
 scripts/train_gpt2.sh <data_dir> <model_cfg> <tokenizer_cfg>
@@ -120,3 +123,4 @@ duet-of-models/
 - Evaluation logic is centralized in `src/evaluation/music_metrics.py` so both models are scored consistently.
 - Runtime dependencies are isolated per workflow in `envs/*/pyproject.toml`.
 - Existing notebooks and `data_reports/` are kept for exploration and analysis.
+- For very large MIDI corpora (e.g. 170k files), run subset sampling first and pass the generated list into preprocessing.
