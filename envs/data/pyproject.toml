@@ -1,0 +1,17 @@
+[project]
+name = "duet-of-models-data-env"
+version = "0.1.0"
+description = "Data preprocessing, tokenization, and evaluation environment for duet-of-models."
+requires-python = ">=3.10"
+dependencies = [
+  "miditoolkit>=0.1.16",
+  "miditok>=3.0.0",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+  "numpy>=2.2.6",
+  "pandas>=2.3.3",
+  "pretty-midi>=0.2.11",
+  "dtw-python>=1.7.2",
+  "scikit-learn>=1.7.2",
+  "jupyter>=1.1.1",
+]
