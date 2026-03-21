@@ -74,7 +74,6 @@ duet-of-models/
       xlstm/
     data/
       tokenizer_config.yaml
-      maestro.yaml
     train/
       base.yaml
     eval/
