@@ -218,3 +218,4 @@ __marimo__/
 # Data files
 /data/
 LMD_CLEAN/
+/cache_chunks/
