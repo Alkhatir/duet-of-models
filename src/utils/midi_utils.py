@@ -78,6 +78,7 @@ def build_three_datasets_from_chunks(
 
     collator = DataCollator(
         pad_token_id=tokenizer.pad_token_id,
+        copy_inputs_as_labels=True,
         shift_labels=True,
     )
     return train_ds, val_ds, test_ds, collator
