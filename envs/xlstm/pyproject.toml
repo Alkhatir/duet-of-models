@@ -2,13 +2,29 @@
 name = "duet-of-models-xlstm-env"
 version = "0.1.0"
 description = "xLSTM training environment for duet-of-models."
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-  "torch>=2.2.0",
+  "xlstm",
+  "torch==2.4.0",
+  "numpy<2.0",
   "omegaconf>=2.3.0",
   "dacite>=1.8.1",
-  "numpy>=2.2.6",
-  "setuptools>=70.0.0",
   "tqdm>=4.66",
-  "xlstm",
+  "wandb>=0.25.1",
+  "miditok>=3.0.0",
+  "miditoolkit>=0.1.16",
+  "PyYAML>=6.0",
+  "setuptools>=70",
+]
+
+[dependency-groups]
+dev = [
+  "ipykernel",
+  "pytest",
+  "pytest-xdist",
+  "pre-commit",
+]
+build = [
+  "cmake",
+  "ninja",
 ]
