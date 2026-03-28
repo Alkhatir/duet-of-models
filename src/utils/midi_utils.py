@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 from typing import Iterable, List
 
@@ -7,6 +8,50 @@ def iter_midi_paths(root: Path) -> Iterable[Path]:
     """Yield all .mid/.midi files under a root directory recursively."""
     for ext in (".mid", ".midi"):
         yield from root.rglob(f"*{ext}")
+
+
+def load_midi_paths_from_list(data_list_path: Path) -> list[Path]:
+    if not data_list_path.is_file():
+        raise ValueError(f"Expected a text file of MIDI paths, got '{data_list_path}'.")
+
+    midi_paths: list[Path] = []
+    with data_list_path.open("r", encoding="utf8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            midi_path = Path(line).expanduser()
+            if not midi_path.is_absolute():
+                midi_path = (data_list_path.parent / midi_path).resolve()
+            if not midi_path.is_file():
+                raise ValueError(f"MIDI path from list does not exist: '{midi_path}'.")
+            midi_paths.append(midi_path)
+
+    if not midi_paths:
+        raise ValueError(f"No MIDI paths were found in '{data_list_path}'.")
+
+    return midi_paths
+
+
+def load_named_split_lists(
+    train_list_path: Path,
+    val_list_path: Path,
+    test_list_path: Path,
+) -> tuple[list[Path], list[Path], list[Path]]:
+    return (
+        load_midi_paths_from_list(train_list_path),
+        load_midi_paths_from_list(val_list_path),
+        load_midi_paths_from_list(test_list_path),
+    )
+
+
+def split_cache_dir(paths: List[Path], max_seq_len: int, split_name: str) -> Path:
+    h = sha256()
+    h.update(str(max_seq_len).encode("utf8"))
+    h.update(split_name.encode("utf8"))
+    for path in paths:
+        h.update(str(path).encode("utf8"))
+    return Path("cache_chunks") / h.hexdigest()[:16] / split_name
 
 
 def chunk_split(
@@ -62,9 +107,24 @@ def build_three_datasets_from_chunks(
     """
     from miditok.pytorch_data import DatasetMIDI, DataCollator
 
-    train_chunks = chunk_split(train_src, tokenizer, "cache_chunks/train", max_seq_len)
-    val_chunks = chunk_split(val_src, tokenizer, "cache_chunks/val", max_seq_len)
-    test_chunks = chunk_split(test_src, tokenizer, "cache_chunks/test", max_seq_len)
+    train_chunks = chunk_split(
+        train_src,
+        tokenizer,
+        str(split_cache_dir(train_src, max_seq_len, "train")),
+        max_seq_len,
+    )
+    val_chunks = chunk_split(
+        val_src,
+        tokenizer,
+        str(split_cache_dir(val_src, max_seq_len, "val")),
+        max_seq_len,
+    )
+    test_chunks = chunk_split(
+        test_src,
+        tokenizer,
+        str(split_cache_dir(test_src, max_seq_len, "test")),
+        max_seq_len,
+    )
 
     common = {
         "tokenizer": tokenizer,
