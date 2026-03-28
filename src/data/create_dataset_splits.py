@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from hashlib import sha256
@@ -418,7 +419,7 @@ def write_split_list(path: Path, midi_paths: list[Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for midi_path in midi_paths:
-            fh.write(f"{midi_path}\n")
+            fh.write(f"{os.path.relpath(midi_path, start=path.parent)}\n")
 
 
 def main() -> None:

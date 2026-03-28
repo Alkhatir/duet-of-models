@@ -228,6 +228,10 @@ def proportion(counter: Dict[str, int], total: int) -> Dict[str, float]:
     return {k: counter.get(k, 0) / total for k in FAMILY_KEYS}
 
 
+def format_relative_path(path: str, base_dir: Path) -> str:
+    return os.path.relpath(path, start=base_dir)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Sample a representative MIDI subset by instrument-family strata."
@@ -377,7 +381,7 @@ def main() -> None:
     out_list.parent.mkdir(parents=True, exist_ok=True)
     with open(out_list, "w", encoding="utf-8") as f:
         for p in selected_paths:
-            f.write(f"{p}\n")
+            f.write(f"{format_relative_path(p, out_list.parent)}\n")
 
     family_by_path = {str(r["path"]): str(r["primary_family"]) for r in valid_records}
     sample_counter = Counter()
