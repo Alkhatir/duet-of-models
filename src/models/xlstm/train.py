@@ -2,7 +2,6 @@ import argparse
 import json
 import math
 from pathlib import Path
-from random import shuffle, seed as set_seed
 from typing import Any
 
 import torch
@@ -14,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.data.tokenizer import MidiTokBuilder
-from src.utils.midi_utils import build_three_datasets_from_chunks
+from src.utils.midi_utils import build_three_datasets_from_chunks, load_named_split_lists
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 torch_dtype_map: dict[str, torch.dtype] = {
@@ -49,44 +48,24 @@ def prepare_runtime_config(cfg: DictConfig, tokenizer_vocab_size: int) -> DictCo
     return cfg
 
 
-def load_midi_paths_from_list(data_list_path: Path) -> list[Path]:
-    if not data_list_path.is_file():
-        raise ValueError(f"Expected a text file of MIDI paths, got '{data_list_path}'.")
-
-    midi_paths: list[Path] = []
-    with data_list_path.open("r", encoding="utf8") as fh:
-        for raw_line in fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            midi_path = Path(line).expanduser()
-            if not midi_path.is_absolute():
-                midi_path = (data_list_path.parent / midi_path).resolve()
-            if not midi_path.is_file():
-                raise ValueError(f"MIDI path from list does not exist: '{midi_path}'.")
-            midi_paths.append(midi_path)
-
-    if not midi_paths:
-        raise ValueError(f"No MIDI paths were found in '{data_list_path}'.")
-
-    return midi_paths
-
-
 def build_dataloaders(
-    cfg: DictConfig, tokenizer, data_list_path: Path
+    cfg: DictConfig,
+    tokenizer,
+    train_list_path: Path,
+    val_list_path: Path,
+    test_list_path: Path,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    midi_paths = load_midi_paths_from_list(data_list_path)
-
-    seed_value = int(cfg.get("seed", 42))
-    set_seed(seed_value)
-    shuffle(midi_paths)
-    total = len(midi_paths)
+    train_paths, val_paths, test_paths = load_named_split_lists(
+        train_list_path,
+        val_list_path,
+        test_list_path,
+    )
 
     train_ds, val_ds, test_ds, collator = build_three_datasets_from_chunks(
         tokenizer=tokenizer,
-        train_src=midi_paths[: int(total * 0.8)],
-        val_src=midi_paths[int(total * 0.8) : int(total * 0.9)],
-        test_src=midi_paths[int(total * 0.9) :],
+        train_src=train_paths,
+        val_src=val_paths,
+        test_src=test_paths,
         max_seq_len=int(cfg.data.block_size),
     )
 
@@ -243,14 +222,22 @@ def should_log_to_wandb(cfg: DictConfig) -> bool:
     return "wandb" in {str(target).lower() for target in report_targets}
 
 
-def init_wandb_run(cfg: DictConfig, data_list_path: Path, tok_cfg: str):
+def init_wandb_run(
+    cfg: DictConfig,
+    train_list_path: Path,
+    val_list_path: Path,
+    test_list_path: Path,
+    tok_cfg: str,
+):
     if not should_log_to_wandb(cfg):
         return None
 
     import wandb
 
     run_config = OmegaConf.to_container(cfg, resolve=True)
-    run_config["data_list"] = str(data_list_path)
+    run_config["train_list"] = str(train_list_path)
+    run_config["val_list"] = str(val_list_path)
+    run_config["test_list"] = str(test_list_path)
     run_config["tokenizer_config_path"] = tok_cfg
     return wandb.init(
         project=str(cfg.get("wandb_project", "duet-of-models")),
@@ -320,7 +307,13 @@ def save_artifacts(
             json.dump(metrics, fh, indent=2, sort_keys=True)
 
 
-def train(cfg: DictConfig, data_list_path: Path, tok_cfg: str) -> dict[str, float]:
+def train(
+    cfg: DictConfig,
+    train_list_path: Path,
+    val_list_path: Path,
+    test_list_path: Path,
+    tok_cfg: str,
+) -> dict[str, float]:
     seed_value = int(cfg.get("seed", 42))
     torch.manual_seed(seed_value)
 
@@ -329,14 +322,24 @@ def train(cfg: DictConfig, data_list_path: Path, tok_cfg: str) -> dict[str, floa
     device = resolve_device(str(cfg.train.get("device", "cuda")))
 
     train_loader, val_loader, test_loader = build_dataloaders(
-        cfg, tokenizer, data_list_path
+        cfg,
+        tokenizer,
+        train_list_path,
+        val_list_path,
+        test_list_path,
     )
     model = build_model(cfg, device)
     weight_precision = str(cfg.train.get("weight_precision", "float32"))
     model = model.to(dtype=torch_dtype_map[weight_precision])
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, cfg)
-    wandb_run = init_wandb_run(cfg, data_list_path=data_list_path, tok_cfg=tok_cfg)
+    wandb_run = init_wandb_run(
+        cfg,
+        train_list_path=train_list_path,
+        val_list_path=val_list_path,
+        test_list_path=test_list_path,
+        tok_cfg=tok_cfg,
+    )
 
     output_dir = Path(str(cfg.output_dir))
     logging_steps = max(1, int(cfg.train.get("logging_steps", 20)))
@@ -461,14 +464,30 @@ def main() -> None:
         help="Path to tokenizer YAML config.",
     )
     parser.add_argument(
-        "--data_list",
+        "--train_list",
         required=True,
-        help="Path to the file containing MIDI files paths.",
+        help="Path to the file containing training MIDI paths.",
+    )
+    parser.add_argument(
+        "--val_list",
+        required=True,
+        help="Path to the file containing validation MIDI paths.",
+    )
+    parser.add_argument(
+        "--test_list",
+        required=True,
+        help="Path to the file containing test MIDI paths.",
     )
     args = parser.parse_args()
 
     cfg = load_resolved_config(args.cfg, args.train_cfg)
-    metrics = train(cfg, data_list_path=Path(args.data_list), tok_cfg=args.tok_cfg)
+    metrics = train(
+        cfg,
+        train_list_path=Path(args.train_list),
+        val_list_path=Path(args.val_list),
+        test_list_path=Path(args.test_list),
+        tok_cfg=args.tok_cfg,
+    )
     print(json.dumps(metrics, indent=2, sort_keys=True))
 
 

@@ -20,7 +20,7 @@ from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 from src.data.tokenizer import MidiTokBuilder
 from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
-from src.utils.midi_utils import chunk_split
+from src.utils.midi_utils import chunk_split, load_midi_paths_from_list
 
 
 @dataclass
@@ -141,37 +141,6 @@ def resolve_device(cfg: DictConfig) -> torch.device:
     return torch.device(device_name)
 
 
-def load_midi_paths_from_list(data_list_path: Path) -> list[Path]:
-    midi_paths: list[Path] = []
-    with data_list_path.open("r", encoding="utf8") as fh:
-        for raw_line in fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            midi_path = Path(line).expanduser()
-            if not midi_path.is_absolute():
-                midi_path = (data_list_path.parent / midi_path).resolve()
-            if not midi_path.is_file():
-                raise ValueError(f"MIDI path from list does not exist: '{midi_path}'.")
-            midi_paths.append(midi_path)
-    if not midi_paths:
-        raise ValueError(f"No MIDI paths were found in '{data_list_path}'.")
-    return midi_paths
-
-
-def deterministic_split(paths: list[Path], seed: int) -> dict[str, list[Path]]:
-    shuffled = paths.copy()
-    Random(seed).shuffle(shuffled)
-    total = len(shuffled)
-    train_cut = int(total * 0.8)
-    val_cut = int(total * 0.9)
-    return {
-        "train": shuffled[:train_cut],
-        "val": shuffled[train_cut:val_cut],
-        "test": shuffled[val_cut:],
-    }
-
-
 def cache_key(paths: list[Path], tok_cfg: str, max_seq_len: int, split_name: str) -> str:
     h = sha256()
     h.update(tok_cfg.encode("utf8"))
@@ -212,8 +181,7 @@ def select_eval_samples(
 ) -> list[tuple[Path, Path, list[int]]]:
     midi_paths = load_midi_paths_from_list(data_list_path)
     split_name = str(eval_cfg.get("split", "test"))
-    split_paths = deterministic_split(midi_paths, int(eval_cfg.seed))[split_name]
-    chunk_paths = build_eval_chunks(tokenizer, split_paths, tok_cfg, max_seq_len, split_name)
+    chunk_paths = build_eval_chunks(tokenizer, midi_paths, tok_cfg, max_seq_len, split_name)
     chunk_paths = sorted(chunk_paths)
     Random(int(eval_cfg.seed)).shuffle(chunk_paths)
     selected_chunks = chunk_paths[: int(eval_cfg.num_samples)]

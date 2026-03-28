@@ -2,7 +2,6 @@ import dataclasses
 import argparse
 from pathlib import Path
 from typing import Any, Dict
-from random import shuffle, seed as set_seed
 
 import torch
 from omegaconf import OmegaConf
@@ -18,7 +17,7 @@ from transformers import (
 )
 
 from src.data.tokenizer import MidiTokBuilder
-from src.utils.midi_utils import build_three_datasets_from_chunks, iter_midi_paths
+from src.utils.midi_utils import build_three_datasets_from_chunks, load_named_split_lists
 
 import math
 from transformers import TrainerCallback
@@ -77,9 +76,19 @@ def main():
         "--tok_cfg", default=None, help="Path to tokenizer YAML config "
     )
     parser.add_argument(
-        "--data_dir",
-        default=None,
-        help="Path to data directory where MIDI files are located",
+        "--train_list",
+        required=True,
+        help="Path to text file with training MIDI paths.",
+    )
+    parser.add_argument(
+        "--val_list",
+        required=True,
+        help="Path to text file with validation MIDI paths.",
+    )
+    parser.add_argument(
+        "--test_list",
+        required=True,
+        help="Path to text file with test MIDI paths.",
     )
     args = parser.parse_args()
 
@@ -92,20 +101,17 @@ def main():
     model = build_model(cfg.get("model", {}))
 
     tokenizer = MidiTokBuilder.from_yaml(args.tok_cfg).to_MidiTok()
-
-    if args.data_dir is None:
-        raise ValueError("You must provide a data directory with --data_dir")
-
-    all_midis = list(iter_midi_paths(Path(args.data_dir)))
-    set_seed(seed_value)
-    shuffle(all_midis)
-    n = len(all_midis)
+    train_midis, val_midis, test_midis = load_named_split_lists(
+        Path(args.train_list),
+        Path(args.val_list),
+        Path(args.test_list),
+    )
 
     train_ds, val_ds, test_ds, collator = build_three_datasets_from_chunks(
         tokenizer=tokenizer,
-        train_src=all_midis[: int(n * 0.8)],
-        val_src=all_midis[int(n * 0.8) : int(n * 0.9)],
-        test_src=all_midis[int(n * 0.9) :],
+        train_src=train_midis,
+        val_src=val_midis,
+        test_src=test_midis,
         max_seq_len=cfg["data"]["block_size"],
     )
 
@@ -116,6 +122,9 @@ def main():
         project=cfg.get("wandb_project", "duet-of-models"),
         config={
             **cfg,
+            "train_list": str(args.train_list),
+            "val_list": str(args.val_list),
+            "test_list": str(args.test_list),
             "model": {
                 k: v for k, v in cfg.get("model", {}).items() if k != "vocab_file"
             },
