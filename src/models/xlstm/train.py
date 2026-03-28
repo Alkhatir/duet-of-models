@@ -204,12 +204,73 @@ def compute_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     )
 
 
+def compute_batch_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
+    valid_mask = labels != -100
+    valid_count = int(valid_mask.sum().item())
+    if valid_count == 0:
+        return {
+            "token_accuracy": 0.0,
+            "top5_token_accuracy": 0.0,
+            "mean_token_confidence": 0.0,
+            "valid_tokens": 0.0,
+        }
+
+    masked_logits = logits[valid_mask]
+    masked_labels = labels[valid_mask]
+    probs = torch.softmax(masked_logits, dim=-1)
+    predictions = masked_logits.argmax(dim=-1)
+    topk = min(5, masked_logits.size(-1))
+    topk_predictions = masked_logits.topk(topk, dim=-1).indices
+
+    token_accuracy = (predictions == masked_labels).float().mean().item()
+    top5_accuracy = (topk_predictions == masked_labels.unsqueeze(-1)).any(dim=-1).float().mean().item()
+    mean_confidence = probs.gather(1, predictions.unsqueeze(-1)).mean().item()
+
+    return {
+        "token_accuracy": float(token_accuracy),
+        "top5_token_accuracy": float(top5_accuracy),
+        "mean_token_confidence": float(mean_confidence),
+        "valid_tokens": float(valid_count),
+    }
+
+
+def should_log_to_wandb(cfg: DictConfig) -> bool:
+    report_to = cfg.train.get("report_to", ["none"])
+    if isinstance(report_to, str):
+        report_targets = [report_to]
+    else:
+        report_targets = list(report_to)
+    return "wandb" in {str(target).lower() for target in report_targets}
+
+
+def init_wandb_run(cfg: DictConfig, data_list_path: Path, tok_cfg: str):
+    if not should_log_to_wandb(cfg):
+        return None
+
+    import wandb
+
+    run_config = OmegaConf.to_container(cfg, resolve=True)
+    run_config["data_list"] = str(data_list_path)
+    run_config["tokenizer_config_path"] = tok_cfg
+    return wandb.init(
+        project=str(cfg.get("wandb_project", "duet-of-models")),
+        name=cfg.get("run_name", None),
+        config=run_config,
+        reinit=True,
+        settings=wandb.Settings(start_method="fork"),
+    )
+
+
 def evaluate(
     model: xLSTMLMModel, loader: DataLoader, cfg: DictConfig, device: torch.device
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     total_batches = 0
+    total_valid_tokens = 0.0
+    total_token_accuracy = 0.0
+    total_top5_accuracy = 0.0
+    total_mean_confidence = 0.0
     with torch.no_grad():
         for batch in loader:
             input_ids = batch["input_ids"].to(device)
@@ -217,13 +278,23 @@ def evaluate(
             with make_autocast_context(cfg, device):
                 logits = model(input_ids)
                 loss = compute_loss(logits, labels)
+            batch_metrics = compute_batch_metrics(logits, labels)
             total_loss += float(loss.item())
             total_batches += 1
+            total_valid_tokens += batch_metrics["valid_tokens"]
+            total_token_accuracy += batch_metrics["token_accuracy"] * batch_metrics["valid_tokens"]
+            total_top5_accuracy += batch_metrics["top5_token_accuracy"] * batch_metrics["valid_tokens"]
+            total_mean_confidence += batch_metrics["mean_token_confidence"] * batch_metrics["valid_tokens"]
 
     avg_loss = total_loss / max(total_batches, 1)
+    denom = max(total_valid_tokens, 1.0)
     return {
         "loss": avg_loss,
         "perplexity": math.exp(min(20.0, avg_loss)),
+        "token_accuracy": total_token_accuracy / denom,
+        "top5_token_accuracy": total_top5_accuracy / denom,
+        "mean_token_confidence": total_mean_confidence / denom,
+        "valid_tokens": total_valid_tokens,
     }
 
 
@@ -265,6 +336,7 @@ def train(cfg: DictConfig, data_list_path: Path, tok_cfg: str) -> dict[str, floa
     model = model.to(dtype=torch_dtype_map[weight_precision])
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, cfg)
+    wandb_run = init_wandb_run(cfg, data_list_path=data_list_path, tok_cfg=tok_cfg)
 
     output_dir = Path(str(cfg.output_dir))
     logging_steps = max(1, int(cfg.train.get("logging_steps", 20)))
@@ -301,18 +373,39 @@ def train(cfg: DictConfig, data_list_path: Path, tok_cfg: str) -> dict[str, floa
 
             if global_step % logging_steps == 0:
                 avg_train_loss = running_loss / logging_steps
-                print(
-                    f"step={global_step} train_loss={avg_train_loss:.4f} "
-                    f"train_perplexity={math.exp(min(20.0, avg_train_loss)):.4f}"
-                )
+                train_log = {
+                    "step": global_step,
+                    "train/loss": avg_train_loss,
+                    "train/perplexity": math.exp(min(20.0, avg_train_loss)),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }
+                """ print(
+                    f"step={global_step} train_loss={train_log['train/loss']:.4f} "
+                    f"train_perplexity={train_log['train/perplexity']:.4f} "
+                    f"lr={train_log['train/lr']:.6g}"
+                ) """
+                if wandb_run is not None:
+                    wandb_run.log(train_log, step=global_step)
                 running_loss = 0.0
 
             if global_step % eval_steps == 0:
                 val_metrics = evaluate(model, val_loader, cfg, device)
-                print(
-                    f"step={global_step} val_loss={val_metrics['loss']:.4f} "
-                    f"val_perplexity={val_metrics['perplexity']:.4f}"
-                )
+                val_log = {
+                    "step": global_step,
+                    "val/loss": val_metrics["loss"],
+                    "val/perplexity": val_metrics["perplexity"],
+                    "val/token_accuracy": val_metrics["token_accuracy"],
+                    "val/top5_token_accuracy": val_metrics["top5_token_accuracy"],
+                    "val/mean_token_confidence": val_metrics["mean_token_confidence"],
+                }
+                """ print(
+                    f"step={global_step} val_loss={val_log['val/loss']:.4f} "
+                    f"val_perplexity={val_log['val/perplexity']:.4f} "
+                    f"val_token_accuracy={val_log['val/token_accuracy']:.4f} "
+                    f"val_top5={val_log['val/top5_token_accuracy']:.4f}"
+                ) """
+                if wandb_run is not None:
+                    wandb_run.log(val_log, step=global_step)
 
             if global_step % save_steps == 0:
                 save_artifacts(
@@ -329,10 +422,28 @@ def train(cfg: DictConfig, data_list_path: Path, tok_cfg: str) -> dict[str, floa
         "global_step": global_step,
         "val_loss": val_metrics["loss"],
         "val_perplexity": val_metrics["perplexity"],
+        "val_token_accuracy": val_metrics["token_accuracy"],
+        "val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
+        "val_mean_token_confidence": val_metrics["mean_token_confidence"],
         "test_loss": test_metrics["loss"],
         "test_perplexity": test_metrics["perplexity"],
+        "test_token_accuracy": test_metrics["token_accuracy"],
+        "test_top5_token_accuracy": test_metrics["top5_token_accuracy"],
+        "test_mean_token_confidence": test_metrics["mean_token_confidence"],
     }
     save_artifacts(model, optimizer, cfg, output_dir, global_step, final_metrics)
+    if wandb_run is not None:
+        wandb_run.log(
+            {
+                "test/loss": test_metrics["loss"],
+                "test/perplexity": test_metrics["perplexity"],
+                "test/token_accuracy": test_metrics["token_accuracy"],
+                "test/top5_token_accuracy": test_metrics["top5_token_accuracy"],
+                "test/mean_token_confidence": test_metrics["mean_token_confidence"],
+            },
+            step=global_step,
+        )
+        wandb_run.finish()
     return final_metrics
 
 
