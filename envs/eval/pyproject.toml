@@ -1,0 +1,22 @@
+[project]
+name = "duet-of-models-eval-env"
+version = "0.1.0"
+description = "Shared post-training generation evaluation environment for duet-of-models."
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "torch==2.4.0",
+  "transformers>=4.45.0",
+  "xlstm",
+  "numpy<2.0",
+  "omegaconf>=2.3.0",
+  "dacite>=1.8.1",
+  "miditok>=3.0.0",
+  "miditoolkit>=0.1.16",
+  "pretty-midi>=0.2.11",
+  "dtw-python>=1.7.2",
+  "scikit-learn>=1.7.2",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+  "wandb>=0.25.1",
+  "setuptools>=70",
+]
