@@ -7,7 +7,7 @@ dependencies = [
   "torch==2.4.0",
   "transformers>=4.45.0",
   "xlstm",
-  "numpy<2.0",
+  "numpy>=2.0",
   "omegaconf>=2.3.0",
   "dacite>=1.8.1",
   "miditok>=3.0.0",
