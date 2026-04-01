@@ -63,6 +63,13 @@ duet-of-models/
   pyproject.toml
   uv.lock
 
+  data_reports/
+    genre_dist.csv
+    basic_info.html
+    genre_distribution_based_on_artists.png
+    metrics.html
+    splits/
+
   envs/
     data/
       pyproject.toml
@@ -127,3 +134,4 @@ duet-of-models/
 - Existing notebooks and `data_reports/` are kept for exploration and analysis.
 - For very large MIDI corpora (e.g. 170k files), run subset sampling first and pass the generated list into preprocessing.
 - For reproducible experiments, create fixed split files from the sampled subset and feed those explicit lists into training and evaluation.
+- `genre_dist.csv` is created based on LastFM tags and used for creating the sample for the dataset and the splits afterwards.
