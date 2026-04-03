@@ -34,11 +34,8 @@ uv sync --project envs/xlstm
 ## Commands
 
 ```bash
-# representative subset sampling (recommended before preprocess on huge corpora)
-scripts/sample_subset.sh <data_dir> <n> <out_list> [seed] [jobs]
-
-# create fixed leakage-safe train/val/test splits from the sampled subset
-scripts/create_dataset_splits.sh <sampled_list> [out_dir] [seed]
+# sample MIDI rows from `genre_dist.csv` and create fixed leakage-safe train/val/test splits
+scripts/create_dataset_splits.sh <subset_size> [genre_csv] [out_dir] [seed] [jobs]
 
 # data preprocessing
 scripts/preprocess_data.sh <input_dir> <output_dir> [input_list] [jobs]
@@ -133,5 +130,5 @@ duet-of-models/
 - Runtime dependencies are isolated per workflow in `envs/*/pyproject.toml`.
 - Existing notebooks and `data_reports/` are kept for exploration and analysis.
 - For very large MIDI corpora (e.g. 170k files), run subset sampling first and pass the generated list into preprocessing.
-- For reproducible experiments, create fixed split files from the sampled subset and feed those explicit lists into training and evaluation.
+- For reproducible experiments, create fixed split files from `data_reports/genre_dist.csv` and feed those explicit lists into training and evaluation.
 - `genre_dist.csv` is created based on LastFM tags and used for creating the sample for the dataset and the splits afterwards.
