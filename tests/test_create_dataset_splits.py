@@ -170,6 +170,40 @@ def test_same_music_id_never_leaks_across_splits(tmp_path: Path) -> None:
     assert len(non_empty) == 1
 
 
+def test_duplicate_midis_within_id_are_deduped_before_sampling(tmp_path: Path) -> None:
+    raw = tmp_path / "data" / "lmd_matched"
+    csv_path = tmp_path / "data_reports" / "genre_dist.csv"
+    out_dir = tmp_path / "data_reports" / "splits"
+
+    dup_a = raw / "song_dup_a.mid"
+    dup_b = raw / "song_dup_b.mid"
+    unique_b = raw / "song_unique_b.mid"
+    unique_c = raw / "song_unique_c.mid"
+    _write_midi(dup_a, [(0, False), (24, False)], note_multiplier=2)
+    _write_midi(dup_b, [(0, False), (24, False)], note_multiplier=2)
+    _write_midi(unique_b, [(40, False)], note_multiplier=1)
+    _write_midi(unique_c, [(0, True), (56, False)], note_multiplier=1)
+
+    rows = [
+        {"id": "SONG_DUP", "rock": "1.0", "jazz": "0.0", "electronic": "0.0", "midi_path": str(dup_a)},
+        {"id": "SONG_DUP", "rock": "1.0", "jazz": "0.0", "electronic": "0.0", "midi_path": str(dup_b)},
+        {"id": "SONG_B", "rock": "0.0", "jazz": "1.0", "electronic": "0.0", "midi_path": str(unique_b)},
+        {"id": "SONG_C", "rock": "0.0", "jazz": "0.0", "electronic": "1.0", "midi_path": str(unique_c)},
+    ]
+    _write_genre_csv(csv_path, rows)
+
+    report = _run_split(csv_path, out_dir, subset_size=3, seed=5)
+
+    assert report["totals"]["valid_rows"] == 4
+    assert report["totals"]["deduped_rows"] == 3
+    assert report["dedupe"]["rows_removed_as_duplicates"] == 1
+    assert report["dedupe"]["duplicate_clusters_within_id"] == 1
+
+    sampled_entries = (out_dir.parent / "sampled_subset.txt").read_text(encoding="utf-8").splitlines()
+    duplicate_entries = [entry for entry in sampled_entries if "song_dup_" in entry]
+    assert len(duplicate_entries) == 1
+
+
 def test_selected_genres_are_filtered_and_reported_over_ids(tmp_path: Path) -> None:
     raw = tmp_path / "data" / "lmd_matched"
     csv_path = tmp_path / "data_reports" / "genre_dist.csv"
