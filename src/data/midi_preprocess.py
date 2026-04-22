@@ -14,12 +14,13 @@
 #   python lmd_prep_slim.py --in ./raw --out ./clean --load-config ./capture.yaml
 
 from __future__ import annotations
-import argparse, json, hashlib
+import argparse, json, hashlib, os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 
-from utils import iter_midi_paths
+from src.utils.midi_utils import iter_midi_paths
 
 import yaml
 from tqdm import tqdm
@@ -343,7 +344,7 @@ def trim_empty_tracks(mid: MidiFile) -> None:
 
 def process_file(
     path: Path, out_dir: Path, cfg: ModelCaptureConfig
-) -> Optional[Tuple[str, int, int]]:
+) -> Optional[Tuple[str, int, int, Path]]:
     """Clean a single MIDI file and (optionally) dedupe-sign it.
 
 
@@ -393,7 +394,8 @@ def process_file(
     sig = signature_for_dedupe(mid, cfg)
 
     # Write cleaned MIDI
-    rel = path.stem
+    # Add a short deterministic hash suffix to avoid filename collisions across folders.
+    rel = f"{path.stem}_{hashlib.sha1(str(path).encode('utf-8')).hexdigest()[:10]}"
     out_path = out_dir / f"{rel}.mid"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -402,7 +404,87 @@ def process_file(
         return None
 
     n_notes = sum(len(i.notes) for i in mid.instruments)
-    return (sig, n_notes, mid.ticks_per_beat)
+    return (sig, n_notes, mid.ticks_per_beat, out_path)
+
+
+def _parse_bool_flag(value: str) -> bool:
+    val = value.strip().lower()
+    if val in {"1", "true", "yes", "y", "on"}:
+        return True
+    if val in {"0", "false", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(
+        f"Invalid boolean value '{value}'. Use true/false."
+    )
+
+
+def _resolve_jobs(jobs: int) -> int:
+    if jobs > 0:
+        return jobs
+    cpu = os.cpu_count() or 1
+    return max(4, cpu - 2)
+
+
+def _load_midi_inputs(input_root: Path, input_list: Optional[Path]) -> List[Path]:
+    if input_list is None:
+        return list(iter_midi_paths(input_root))
+
+    items: List[Path] = []
+    with open(input_list, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            p = Path(line)
+            if not p.is_absolute():
+                p = input_root / p
+            items.append(p.resolve())
+    return items
+
+
+def _process_worker(task: Tuple[str, str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    src_path_str, out_dir_str, cfg_dict = task
+    cfg = ModelCaptureConfig(**cfg_dict)
+    src_path = Path(src_path_str)
+    out_dir = Path(out_dir_str)
+    res = process_file(src_path, out_dir, cfg)
+    if res is None:
+        return None
+
+    sig, n_notes, ppq, out_path = res
+    return {
+        "src_path": str(src_path),
+        "out_path": str(out_path),
+        "signature": sig,
+        "notes": n_notes,
+        "ppq": ppq,
+    }
+
+
+def _run_processing(
+    midi_paths: List[Path],
+    out_dir: Path,
+    cfg: ModelCaptureConfig,
+    jobs: int,
+    chunksize: int,
+) -> List[Dict[str, Any]]:
+    cfg_dict = asdict(cfg)
+    tasks = ((str(p), str(out_dir), cfg_dict) for p in midi_paths)
+    if jobs <= 1:
+        out: List[Dict[str, Any]] = []
+        for task in tqdm(tasks, desc="Cleaning MIDIs", total=len(midi_paths)):
+            rec = _process_worker(task)
+            if rec is not None:
+                out.append(rec)
+        return out
+
+    out: List[Dict[str, Any]] = []
+    with ProcessPoolExecutor(max_workers=jobs) as ex:
+        iterator = ex.map(_process_worker, tasks, chunksize=max(1, chunksize))
+        for rec in tqdm(iterator, desc="Cleaning MIDIs", total=len(midi_paths)):
+            if rec is not None:
+                out.append(rec)
+    return out
 
 
 # ---------------------------
@@ -463,10 +545,34 @@ def main():
         help="Write JSON file of kept signatures (for reuse)",
     )
     ap.add_argument(
+        "--input-list",
+        type=Path,
+        default=None,
+        help="Optional newline-delimited list of MIDI paths to process.",
+    )
+    ap.add_argument(
         "--limit",
         type=int,
         default=0,
         help="Optional max number of files to process (0 = all)",
+    )
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="Number of worker processes (0 = auto max(4, cpu-2)).",
+    )
+    ap.add_argument(
+        "--chunksize",
+        type=int,
+        default=32,
+        help="Task chunksize for process pool workers.",
+    )
+    ap.add_argument(
+        "--fail-on-too-few",
+        type=_parse_bool_flag,
+        default=True,
+        help="Fail if no MIDI files are discovered after applying filters (true/false).",
     )
     args = ap.parse_args()
 
@@ -479,50 +585,58 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     seen: Dict[str, str] = {}
-    kept = 0
-    total = 0
-
-    man_fp = open(args.write_manifest, "w") if args.write_manifest else None
-
-    midi_paths = list(iter_midi_paths(args.inp))
+    midi_paths = _load_midi_inputs(args.inp, args.input_list)
     if args.limit and args.limit > 0:
         midi_paths = midi_paths[: args.limit]
 
-    for p in tqdm(midi_paths, desc="Cleaning MIDIs"):
-        total += 1
-        res = process_file(p, args.out, cfg)
-        if res is None:
-            continue
-        sig, n_notes, ppq = res
+    if not midi_paths and args.fail_on_too_few:
+        raise SystemExit("No MIDI inputs discovered to process.")
+
+    jobs = _resolve_jobs(args.jobs)
+    results = _run_processing(
+        midi_paths=midi_paths,
+        out_dir=args.out,
+        cfg=cfg,
+        jobs=jobs,
+        chunksize=args.chunksize,
+    )
+
+    kept_records: List[Dict[str, Any]] = []
+    for rec in sorted(results, key=lambda x: x["src_path"]):
         if cfg.dedupe_by_signature:
+            sig = rec["signature"]
             if sig in seen:
                 try:
-                    (args.out / f"{p.stem}.mid").unlink(missing_ok=True)
+                    Path(rec["out_path"]).unlink(missing_ok=True)
                 except Exception:
                     pass
                 continue
-            seen[sig] = p.name
+            seen[sig] = Path(rec["src_path"]).name
+        kept_records.append(rec)
 
-        kept += 1
-        if man_fp:
-            record = {
-                "src_path": str(p),
-                "out_path": str(args.out / f"{p.stem}.mid"),
-                "notes": n_notes,
-                "signature": sig,
-                "ppq": ppq,  # actual PPQ (not rebased)
-                "drum_map": cfg.drum_map,
-            }
-            man_fp.write(json.dumps(record) + "\n")
-
-    if man_fp:
-        man_fp.close()
+    if args.write_manifest:
+        args.write_manifest.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.write_manifest, "w", encoding="utf-8") as man_fp:
+            for rec in kept_records:
+                rec_out = {
+                    "src_path": rec["src_path"],
+                    "out_path": rec["out_path"],
+                    "notes": rec["notes"],
+                    "signature": rec["signature"],
+                    "ppq": rec["ppq"],
+                    "drum_map": cfg.drum_map,
+                }
+                man_fp.write(json.dumps(rec_out) + "\n")
 
     if args.dedupe_index:
         with open(args.dedupe_index, "w") as f:
             json.dump(seen, f, indent=2)
 
-    print(f"[done] processed={total}, kept={kept}, deduped={len(seen)}")
+    print(
+        f"[done] processed={len(midi_paths)}, kept={len(kept_records)}, "
+        f"unique_signatures={len(seen) if cfg.dedupe_by_signature else len(kept_records)}, "
+        f"jobs={jobs}"
+    )
 
 
 if __name__ == "__main__":

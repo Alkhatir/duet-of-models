@@ -51,7 +51,7 @@ except Exception:
 from miditok import REMI, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile  # type: ignore
 from pretty_midi import PrettyMIDI  # type: ignore
-from metrics_onset import midi_roundtrip_metrics_onset_chroma
+from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
 
 
 def read_midi_duration_seconds(midi: MidiFile) -> float:

@@ -216,5 +216,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Data files
-data/
+/data/
 LMD_CLEAN/
+/cache_chunks/

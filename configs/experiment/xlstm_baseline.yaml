@@ -1,0 +1,6 @@
+name: xlstm_baseline
+description: xLSTM baseline on cleaned MIDI corpus.
+model_config: configs/model/xlstm/basic.yaml
+tokenizer_config: configs/data/tokenizer_config.yaml
+train_config: configs/train/base.yaml
+eval_config: configs/eval/music_metrics.yaml

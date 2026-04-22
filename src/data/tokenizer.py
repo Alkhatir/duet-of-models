@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, Tuple, Sequence, Mapping, Optional, List
 import copy
 import argparse
-from utils import iter_midi_paths
+from src.utils.midi_utils import iter_midi_paths
 import yaml
 from miditok import MusicTokenizer
 
