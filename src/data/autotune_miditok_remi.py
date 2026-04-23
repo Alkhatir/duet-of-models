@@ -34,6 +34,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Any
 import traceback
@@ -50,6 +51,7 @@ from rich.progress import track
 from miditok import REMI, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile  # type: ignore
 from pretty_midi import PrettyMIDI  # type: ignore
+from symusic import Score  # type: ignore
 
 from src.utils.midi_utils import load_midi_paths_from_list
 from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
@@ -59,7 +61,7 @@ LOGGER = logging.getLogger(__name__)
 _WORKER_FILE_PATHS: List[Path] = []
 _WORKER_ORIGINS: List[Dict[str, float | int]] = []
 _WORKER_DECODE = True
-_WORKER_MIDIS: List[Tuple[Path, MidiFile]] | None = None
+_WORKER_SCORES: List[Tuple[Path, Score]] | None = None
 
 
 def progress_iter(
@@ -418,25 +420,25 @@ def init_worker(
     decode: bool,
 ) -> None:
     """Initialize worker-global dataset state for per-config evaluation."""
-    global _WORKER_FILE_PATHS, _WORKER_ORIGINS, _WORKER_DECODE, _WORKER_MIDIS
+    global _WORKER_FILE_PATHS, _WORKER_ORIGINS, _WORKER_DECODE, _WORKER_SCORES
     _WORKER_FILE_PATHS = file_paths
     _WORKER_ORIGINS = origins
     _WORKER_DECODE = decode
-    _WORKER_MIDIS = None
+    _WORKER_SCORES = None
 
 
-def get_worker_midis() -> List[Tuple[Path, MidiFile]]:
-    """Load worker MIDI objects once per process and reuse them across configs."""
-    global _WORKER_MIDIS
-    if _WORKER_MIDIS is None:
-        _WORKER_MIDIS = [(path, load_midi(path)) for path in _WORKER_FILE_PATHS]
-    return _WORKER_MIDIS
+def get_worker_scores() -> List[Tuple[Path, Score]]:
+    """Load worker Score objects once per process and reuse them across configs."""
+    global _WORKER_SCORES
+    if _WORKER_SCORES is None:
+        _WORKER_SCORES = [(path, Score(path)) for path in _WORKER_FILE_PATHS]
+    return _WORKER_SCORES
 
 
 def evaluate_config_worker(task: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
     """Evaluate one tokenizer config inside a worker process."""
     cfg_id, cfg = task
-    dataset_midis = get_worker_midis()
+    dataset_scores = get_worker_scores()
     origins = _WORKER_ORIGINS
     decode = _WORKER_DECODE
 
@@ -466,9 +468,9 @@ def evaluate_config_worker(task: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
 
     with tempfile.TemporaryDirectory(prefix=f"autotune_miditok_cfg_{cfg_id}_") as tmpdir:
         tmpdir_path = Path(tmpdir)
-        for file_idx, ((path, midi), orig) in enumerate(zip(dataset_midis, origins)):
+        for file_idx, ((path, score), orig) in enumerate(zip(dataset_scores, origins)):
             try:
-                toks = tokenizer(midi)
+                toks = tokenizer(score)
                 total_length = 0
                 if isinstance(toks, list):
                     for track in toks:
@@ -536,7 +538,7 @@ def evaluate_config_worker(task: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
             cfg_id,
             cfg,
             errs,
-            len(dataset_midis),
+            len(dataset_scores),
             tok_lens,
             origins,
             decode,
@@ -614,6 +616,16 @@ def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
 
 
 def configure_logging(log_level: str, quiet: bool) -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Attribute controls are not compatible with .*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"You are using a depreciated `miditoolkit\.MidiFile` object\..*",
+        category=UserWarning,
+    )
     level = logging.ERROR if quiet else getattr(logging, log_level.upper())
     logging.basicConfig(
         level=level,
