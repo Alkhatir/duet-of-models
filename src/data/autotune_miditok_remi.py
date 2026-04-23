@@ -54,6 +54,7 @@ from miditok import REMI, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile  # type: ignore
 from pretty_midi import PrettyMIDI  # type: ignore
 
+from src.utils.midi_utils import load_midi_paths_from_list
 from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
 
 
@@ -384,7 +385,7 @@ def main():
     """CLI entrypoint: sweep tokenizer configs, evaluate and rank them.
 
     This function parses command-line arguments, loads a sample of MIDI files
-    from `--input` (up to `--max-files`), precomputes baseline features
+    from `--input-list` (up to `--max-files`), precomputes baseline features
     (notes, tempo/time signature counts, duration), then iterates over the
     configuration grid. For each config it attempts to construct a REMI
     tokenizer, tokenize each MIDI and optionally decode back to MIDI to
@@ -403,10 +404,10 @@ def main():
         description="Auto-tune Miditok REMI configs for a MIDI dataset."
     )
     p.add_argument(
-        "--input", type=Path, required=True, help="Folder with .mid/.midi files"
-    )
-    p.add_argument(
-        "--extensions", nargs="+", default=[".mid", ".midi"], help="File extensions"
+        "--input-list",
+        type=Path,
+        required=True,
+        help="Text file of MIDI paths, relative to the list file or absolute.",
     )
     p.add_argument(
         "--max-files", type=int, default=200, help="Evaluate at most N files"
@@ -433,11 +434,8 @@ def main():
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     # Collect files
-    exts = {e.lower() for e in args.extensions}
-    files = [p for p in args.input.rglob("*") if p.suffix.lower() in exts]
+    files = load_midi_paths_from_list(args.input_list)
     files.sort()
-    if not files:
-        raise SystemExit("No MIDI files found.")
     if args.max_files:
         files = files[: args.max_files]
 
