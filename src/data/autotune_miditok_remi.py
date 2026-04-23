@@ -31,6 +31,7 @@ import os, tempfile
 import argparse
 import ast
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -41,13 +42,8 @@ import statistics
 import numpy as np  # type: ignore
 import pandas as pd
 import yaml  # type: ignore
-
-try:
-    from tqdm import tqdm  # type: ignore
-
-    HAS_TQDM = True
-except Exception:
-    HAS_TQDM = False
+from rich.logging import RichHandler
+from rich.progress import track
 
 # Miditok / Miditoolkit
 from miditok import REMI, TokenizerConfig  # type: ignore
@@ -56,6 +52,18 @@ from pretty_midi import PrettyMIDI  # type: ignore
 
 from src.utils.midi_utils import load_midi_paths_from_list
 from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def progress_iter(
+    iterable: List[Any] | Iterable[Any], *, total: int, description: str, enabled: bool
+):
+    """Wrap an iterable in a Rich progress bar when progress output is enabled."""
+    if not enabled:
+        return iterable
+    return track(iterable, total=total, description=description)
 
 
 def read_midi_duration_seconds(midi: MidiFile) -> float:
@@ -381,6 +389,17 @@ def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     return df
 
 
+def configure_logging(log_level: str, quiet: bool) -> None:
+    level = logging.ERROR if quiet else getattr(logging, log_level.upper())
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(markup=True, show_path=False)],
+        force=True,
+    )
+
+
 def main():
     """CLI entrypoint: sweep tokenizer configs, evaluate and rank them.
 
@@ -428,9 +447,21 @@ def main():
         default=None,
         help='JSON like {"w_len":1,"w_len_p95":0.5,"w_loss":2,"w_struct":1,"w_err":3}',
     )
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Console logging level.",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only show errors and disable progress bars.",
+    )
     p.add_argument("--outdir", type=Path, required=True, help="Where to save results")
     args = p.parse_args()
 
+    configure_logging(args.log_level, args.quiet)
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     # Collect files
@@ -441,18 +472,23 @@ def main():
 
     # Prepare dataset stats
     dataset_midis: List[Tuple[Path, MidiFile]] = []
-    iterator = files
-    if HAS_TQDM:
-        iterator = tqdm(files, desc="Loading MIDIs")
+    iterator = progress_iter(
+        files,
+        total=len(files),
+        description="Loading MIDIs",
+        enabled=not args.quiet,
+    )
     for f in iterator:
         try:
             m = load_midi(f)
             dataset_midis.append((f, m))
         except Exception:
-            print(f"[WARN] Failed to load {f}:\n{traceback.format_exc()}")
+            LOGGER.warning("Failed to load %s", f)
+            LOGGER.debug("Load traceback for %s\n%s", f, traceback.format_exc())
 
     if not dataset_midis:
         raise SystemExit("No valid MIDI files could be loaded.")
+    LOGGER.info("Loaded %d MIDI files from %s", len(dataset_midis), args.input_list)
 
     # Precompute original dataset features
     origins = []
@@ -499,15 +535,19 @@ def main():
         try:
             weights.update(json.loads(args.weights))
         except Exception:
-            print("[WARN] Failed to parse --weights; using defaults.")
+            LOGGER.warning("Failed to parse --weights; using defaults.")
 
     rows = []
     per_config_detail = []
     configs_by_id = {i: cfg for i, cfg in enumerate(grid)}
+    LOGGER.info("Evaluating %d tokenizer configs", len(grid))
 
-    grid_iter = grid
-    if HAS_TQDM:
-        grid_iter = tqdm(grid, desc="Configs")
+    grid_iter = progress_iter(
+        grid,
+        total=len(grid),
+        description="Configs",
+        enabled=not args.quiet,
+    )
     with tempfile.TemporaryDirectory(prefix="autotune_miditok_") as tmpdir:
         tmpdir_path = Path(tmpdir)
         for i, cfg in enumerate(grid_iter):
@@ -526,7 +566,12 @@ def main():
             try:
                 tokenizer = make_tokenizer(cfg)
             except Exception:
-                print(f"[WARN] Bad tokenizer config {cfg}:\n{traceback.format_exc()}")
+                LOGGER.warning("Bad tokenizer config at id=%d: %s", i, cfg)
+                LOGGER.debug(
+                    "Tokenizer construction traceback for config id=%d\n%s",
+                    i,
+                    traceback.format_exc(),
+                )
                 args.outdir.joinpath("tokenization_configs_errors").mkdir(
                     parents=True, exist_ok=True
                 )
@@ -612,13 +657,20 @@ def main():
                         except Exception as e:
                             # If decode fails, count as a full round-trip error for that item.
                             n_loss, t_diff, s_diff = 1.0, 5.0, 5.0
-                            print(f"[WARN] Decode failed for {path}: {e}")
+                            LOGGER.warning("Decode failed for %s: %s", path, e)
                         note_losses.append(n_loss)
                         tempo_diffs.append(t_diff)
                         timesig_diffs.append(s_diff)
 
                 except Exception:
                     errs += 1
+                    LOGGER.warning("Tokenization failed for config id=%d on %s", i, path)
+                    LOGGER.debug(
+                        "Tokenization traceback for config id=%d file=%s\n%s",
+                        i,
+                        path,
+                        traceback.format_exc(),
+                    )
                     # continue to next file
 
             n_ok = len(dataset_midis) - errs
@@ -690,6 +742,14 @@ def main():
                     "errs": errs,
                 }
             )
+            LOGGER.info(
+                "Config %d finished: error_rate=%.3f tokens_per_second=%s score_pending",
+                i,
+                row["error_rate"],
+                f"{row['tokens_per_second']:.2f}"
+                if np.isfinite(row["tokens_per_second"])
+                else "nan",
+            )
 
     df = pd.DataFrame(rows)
     df.to_csv(args.outdir / "results.csv", index=False)
@@ -724,7 +784,7 @@ def main():
     if len(ranked) > 0:
         best_id = int(ranked.iloc[0]["id"])
         best_cfg = configs_by_id[best_id]
-        print("Best config (lowest score):", best_id)
+        LOGGER.info("Best config (lowest score): %d", best_id)
         (args.outdir / "best_config.json").write_text(
             json.dumps(to_jsonable(best_cfg), indent=2, sort_keys=True),
             encoding="utf-8",
@@ -755,7 +815,7 @@ def main():
         encoding="utf-8",
     )
 
-    print("Done. Wrote:", args.outdir)
+    LOGGER.info("Done. Wrote: %s", args.outdir)
 
 
 if __name__ == "__main__":
