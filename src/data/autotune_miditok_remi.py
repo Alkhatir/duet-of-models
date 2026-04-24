@@ -281,6 +281,30 @@ def make_tokenizer(cfg_dict: Dict[str, Any]) -> REMI:
     return REMI(tokenizer_config=config)
 
 
+def filter_valid_configs(
+    grid: List[Dict[str, Any]],
+) -> Tuple[List[Tuple[int, Dict[str, Any]]], int]:
+    """Validate configs before evaluation and keep only runnable ones.
+
+    Returns the surviving `(original_id, config)` pairs plus the number removed.
+    """
+    valid: List[Tuple[int, Dict[str, Any]]] = []
+    invalid_count = 0
+    for cfg_id, cfg in enumerate(grid):
+        try:
+            make_tokenizer(cfg)
+        except Exception:
+            invalid_count += 1
+            LOGGER.debug(
+                "Dropping invalid config id=%d before search\n%s",
+                cfg_id,
+                traceback.format_exc(),
+            )
+            continue
+        valid.append((cfg_id, cfg))
+    return valid, invalid_count
+
+
 def to_jsonable(value: Any) -> Any:
     """Convert configs with tuple keys/values into JSON-compatible objects."""
     if isinstance(value, dict):
@@ -784,6 +808,16 @@ def main():
     else:
         grid = default_grid()
 
+    valid_configs, invalid_count = filter_valid_configs(grid)
+    if not valid_configs:
+        raise SystemExit("No valid tokenizer configs remain after validation.")
+    if invalid_count > 0:
+        LOGGER.info(
+            "Dropped %d invalid tokenizer configs before evaluation; %d valid configs remain",
+            invalid_count,
+            len(valid_configs),
+        )
+
     weights = {
         "w_len": 1.0,
         "w_len_p95": 0.5,
@@ -804,11 +838,11 @@ def main():
             LOGGER.warning("Failed to parse --weights; using defaults.")
 
     rows = []
-    configs_by_id = {i: cfg for i, cfg in enumerate(grid)}
+    configs_by_id = {cfg_id: cfg for cfg_id, cfg in valid_configs}
     worker_count = min(resolve_jobs(args.jobs), len(grid))
     LOGGER.info(
         "Evaluating %d tokenizer configs using %d worker process(es)",
-        len(grid),
+        len(valid_configs),
         worker_count,
     )
 
@@ -824,8 +858,8 @@ def main():
     if worker_count == 1:
         init_worker(files, origins, args.decode)
         result_iter = progress_iter(
-            list(configs_by_id.items()),
-            total=len(grid),
+            valid_configs,
+            total=len(valid_configs),
             description="Configs",
             enabled=not args.quiet,
         )
@@ -837,7 +871,7 @@ def main():
             initargs=(files, origins, args.decode),
         ) as pool:
             futures = [
-                pool.submit(evaluate_config_worker, task) for task in configs_by_id.items()
+                pool.submit(evaluate_config_worker, task) for task in valid_configs
             ]
             result_iter = progress_iter(
                 as_completed(futures),
@@ -851,39 +885,9 @@ def main():
         cfg_id = int(result["id"])
         cfg = configs_by_id[cfg_id]
         if result["status"] == "bad_config":
-            LOGGER.warning("Bad tokenizer config at id=%d: %s", cfg_id, cfg)
-            LOGGER.debug(
-                "Tokenizer construction traceback for config id=%d\n%s",
+            LOGGER.warning(
+                "Config id=%d failed validation during worker startup and was skipped",
                 cfg_id,
-                result["traceback"],
-            )
-            args.outdir.joinpath("tokenization_configs_errors").mkdir(
-                parents=True, exist_ok=True
-            )
-            with open(
-                args.outdir / "tokenization_configs_errors" / f"{cfg_id}.yaml",
-                "w",
-                encoding="utf-8",
-            ) as fh:
-                yaml.dump(cfg, stream=fh, sort_keys=False)
-            rows.append(
-                dict(
-                    id=cfg_id,
-                    error_rate=1.0,
-                    tokens_per_second=np.nan,
-                    median_tokens_per_file=np.nan,
-                    p95_tokens_per_file=np.nan,
-                    note_loss_rate=np.nan,
-                    tempo_diff=np.nan,
-                    timesig_diff=np.nan,
-                    chroma_dtw_score=np.nan,
-                    precision=np.nan,
-                    recall=np.nan,
-                    f1=np.nan,
-                    onset_mae_sec=np.nan,
-                    dur_mae_sec=np.nan,
-                    **flatten_config(cfg),
-                )
             )
             continue
 
