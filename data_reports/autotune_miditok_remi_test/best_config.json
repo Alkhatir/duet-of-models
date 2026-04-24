@@ -1,0 +1,17 @@
+{
+  "beat_res": {
+    "(0, 4)": 12,
+    "(4, 12)": 6
+  },
+  "log_tempos": false,
+  "num_tempos": 32,
+  "num_velocities": 32,
+  "one_token_stream_for_programs": true,
+  "program_changes": true,
+  "use_chords": false,
+  "use_pitchdrum_tokens": true,
+  "use_programs": true,
+  "use_rests": false,
+  "use_tempos": true,
+  "use_time_signatures": true
+}
