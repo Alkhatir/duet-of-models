@@ -908,33 +908,8 @@ def main():
         )
 
     df = pd.DataFrame(rows)
-    df.to_csv(args.outdir / "results.csv", index=False)
-
-    # Rank
     ranked = rank_configs(df, weights)
     ranked.to_csv(args.outdir / "results_ranked.csv", index=False)
-
-    metric_cols = [
-        "id",
-        "score",
-        "error_rate",
-        "tokens_per_second",
-        "median_tokens_per_file",
-        "p95_tokens_per_file",
-        "note_loss_rate",
-        "tempo_diff",
-        "timesig_diff",
-        "chroma_dtw_score",
-        "precision",
-        "recall",
-        "f1",
-        "onset_mae_sec",
-        "dur_mae_sec",
-    ]
-    config_cols = [c for c in ranked.columns if c.startswith("cfg_")]
-    ranked[[c for c in metric_cols + config_cols if c in ranked.columns]].to_csv(
-        args.outdir / "evaluation_matrix.csv", index=False
-    )
 
     # Save best config
     if len(ranked) > 0:
@@ -961,9 +936,7 @@ def main():
     # Also drop a quick README
     (args.outdir / "README.md").write_text(
         "# Auto-tuning results\n\n"
-        "- `results.csv`: raw metrics per config\n"
-        "- `results_ranked.csv`: same, with `score` and sorted (lower is better)\n"
-        "- `evaluation_matrix.csv`: ranked metrics plus flattened config columns\n"
+        "- `results_ranked.csv`: ranked metrics per config with `score` (lower is better)\n"
         "- `best_config.json`: JSON-safe winning TokenizerConfig dict for inspection\n"
         "- `best_config.yaml`: winning TokenizerConfig dict with Python tuple keys preserved\n"
         "- `best_tokenizer.yaml`: winning config in this repo's MidiTokBuilder format\n\n"
