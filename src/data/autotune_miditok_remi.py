@@ -29,9 +29,14 @@ Outputs:
 from __future__ import annotations
 import os, tempfile
 import argparse
+import ast
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
+import logging
+import sys
+import warnings
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Iterable, List, Tuple, Any
 import traceback
 import statistics
 
@@ -39,19 +44,41 @@ import statistics
 import numpy as np  # type: ignore
 import pandas as pd
 import yaml  # type: ignore
-
-try:
-    from tqdm import tqdm  # type: ignore
-
-    HAS_TQDM = True
-except Exception:
-    HAS_TQDM = False
+from rich.logging import RichHandler
+from rich.progress import track
 
 # Miditok / Miditoolkit
 from miditok import REMI, TokenizerConfig  # type: ignore
 from miditoolkit import MidiFile  # type: ignore
 from pretty_midi import PrettyMIDI  # type: ignore
+from symusic import Score  # type: ignore
+
+from src.utils.midi_utils import load_midi_paths_from_list
 from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
+
+
+LOGGER = logging.getLogger(__name__)
+_WORKER_FILE_PATHS: List[Path] = []
+_WORKER_ORIGINS: List[Dict[str, float | int]] = []
+_WORKER_DECODE = True
+_WORKER_SCORES: List[Tuple[Path, Score]] | None = None
+
+
+def progress_iter(
+    iterable: List[Any] | Iterable[Any], *, total: int, description: str, enabled: bool
+):
+    """Wrap an iterable in a Rich progress bar when progress output is enabled."""
+    if not enabled:
+        return iterable
+    return track(iterable, total=total, description=description)
+
+
+def resolve_jobs(jobs: int) -> int:
+    """Resolve a requested worker count into a concrete process count."""
+    if jobs > 0:
+        return jobs
+    cpu = os.cpu_count() or 1
+    return max(1, cpu - 1)
 
 
 def read_midi_duration_seconds(midi: MidiFile) -> float:
@@ -161,11 +188,17 @@ def load_midi(path: Path) -> MidiFile:
 def default_grid() -> List[Dict[str, Any]]:
     """Build and return a list of TokenizerConfig-style dictionaries.
 
-    The function enumerates a small but useful cross-product of common
-    tokenizer options (beat resolutions, velocity quantization bins, and
-    boolean toggles such as using chords/rests/tempos/time-signatures/and
-    program changes). Each returned dict is intended to be passed as
-    kwargs into `miditok.TokenizerConfig`.
+    This grid is tuned for REMI+ style multitrack tokenization on LMD-like
+    datasets. It focuses on the parameters that most strongly affect sequence
+    length and round-trip fidelity for multitrack symbolic music:
+
+    - beat resolution
+    - valid rest token resolutions
+    - velocity quantization
+    - program token style
+
+    Less impactful or more expensive knobs (e.g. chord tokens) are left fixed
+    for the first-pass search and can be explored later on shortlisted configs.
 
     Notes:
     - Keep this grid compact to make experiments fast. Expand or provide a
@@ -176,38 +209,56 @@ def default_grid() -> List[Dict[str, Any]]:
     """
     grids = []
     beat_res_opts = [
-        {(0, 4): 8, (4, 12): 4},
-        {(0, 4): 4, (4, 12): 4},
-        {(0, 4): 12, (4, 12): 6},
+        {
+            "beat_res": {(0, 4): 8, (4, 12): 4},
+            "rest_variants": [
+                {
+                    "use_rests": False,
+                },
+                {
+                    "use_rests": True,
+                    "beat_res_rest": {(0, 1): 8, (1, 2): 4, (2, 12): 2},
+                },
+            ],
+        },
+        {
+            "beat_res": {(0, 4): 12, (4, 12): 6},
+            "rest_variants": [
+                {
+                    "use_rests": False,
+                },
+                {
+                    "use_rests": True,
+                    "beat_res_rest": {(0, 1): 12, (1, 2): 6, (2, 12): 3},
+                },
+            ],
+        },
     ]
-    nb_vels = [16, 32, 64]
-    chords = [True, False]
-    rests = [True, False]
-    tempos = [True]
-    timesigs = [True]
-    programs = [True]
+    num_velocities_opts = [16, 32]
+    program_changes_opts = [False, True]
 
-    for br in beat_res_opts:
-        for nv in nb_vels:
-            for uc in chords:
-                for ur in rests:
-                    for ut in tempos:
-                        for uts in timesigs:
-                            for up in programs:
-                                grids.append(
-                                    dict(
-                                        # `beat_res` controls resolution mapping by bar ranges
-                                        beat_res=br,
-                                        # number of velocity bins to quantize velocities
-                                        num_velocities=nv,
-                                        # boolean toggles that enable/disable tokens
-                                        use_chords=uc,
-                                        use_rests=ur,
-                                        use_tempos=ut,
-                                        use_time_signatures=uts,
-                                        use_programs=up,
-                                    )
-                                )
+    for beat_res_entry in beat_res_opts:
+        beat_res = beat_res_entry["beat_res"]
+        for rest_cfg in beat_res_entry["rest_variants"]:
+            for num_velocities in num_velocities_opts:
+                for program_changes in program_changes_opts:
+                    cfg = dict(
+                        beat_res=beat_res,
+                        num_velocities=num_velocities,
+                        use_chords=False,
+                        use_rests=rest_cfg["use_rests"],
+                        use_tempos=True,
+                        num_tempos=32,
+                        log_tempos=False,
+                        use_time_signatures=True,
+                        use_programs=True,
+                        one_token_stream_for_programs=True,
+                        program_changes=program_changes,
+                        use_pitchdrum_tokens=True,
+                    )
+                    if "beat_res_rest" in rest_cfg:
+                        cfg["beat_res_rest"] = rest_cfg["beat_res_rest"]
+                    grids.append(cfg)
     return grids
 
 
@@ -227,7 +278,82 @@ def make_tokenizer(cfg_dict: Dict[str, Any]) -> REMI:
         REMI: instantiated tokenizer ready to be called on MidiFile objects.
     """
     config = TokenizerConfig(**cfg_dict)
-    return REMI(config)
+    return REMI(tokenizer_config=config)
+
+
+def filter_valid_configs(
+    grid: List[Dict[str, Any]],
+) -> Tuple[List[Tuple[int, Dict[str, Any]]], int]:
+    """Validate configs before evaluation and keep only runnable ones.
+
+    Returns the surviving `(original_id, config)` pairs plus the number removed.
+    """
+    valid: List[Tuple[int, Dict[str, Any]]] = []
+    invalid_count = 0
+    for cfg_id, cfg in enumerate(grid):
+        try:
+            make_tokenizer(cfg)
+        except Exception:
+            invalid_count += 1
+            LOGGER.debug(
+                "Dropping invalid config id=%d before search\n%s",
+                cfg_id,
+                traceback.format_exc(),
+            )
+            continue
+        valid.append((cfg_id, cfg))
+    return valid, invalid_count
+
+
+def to_jsonable(value: Any) -> Any:
+    """Convert configs with tuple keys/values into JSON-compatible objects."""
+    if isinstance(value, dict):
+        return {
+            str(k) if isinstance(k, tuple) else str(to_jsonable(k)): to_jsonable(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, tuple):
+        return [to_jsonable(v) for v in value]
+    if isinstance(value, list):
+        return [to_jsonable(v) for v in value]
+    return value
+
+
+def flatten_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten a TokenizerConfig dict into stable scalar-ish CSV columns."""
+    flat: Dict[str, Any] = {}
+    for key, value in cfg.items():
+        if isinstance(value, dict):
+            flat[f"cfg_{key}"] = json.dumps(to_jsonable(value), sort_keys=True)
+        elif isinstance(value, (list, tuple)):
+            flat[f"cfg_{key}"] = json.dumps(to_jsonable(value), sort_keys=True)
+        else:
+            flat[f"cfg_{key}"] = value
+    return flat
+
+
+def normalize_grid_value(value: Any) -> Any:
+    """Restore tuple-like keys/values after loading a JSON grid file."""
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            normalized_key: Any = key
+            if isinstance(key, str) and key.startswith("(") and key.endswith(")"):
+                try:
+                    parsed = ast.literal_eval(key)
+                    if isinstance(parsed, tuple):
+                        normalized_key = parsed
+                except (SyntaxError, ValueError):
+                    pass
+            normalized[normalized_key] = normalize_grid_value(item)
+        return normalized
+    if isinstance(value, list):
+        return [normalize_grid_value(v) for v in value]
+    return value
+
+
+def normalize_grid(grid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [normalize_grid_value(cfg) for cfg in grid]
 
 
 def zscore(arr: np.ndarray) -> np.ndarray:
@@ -243,11 +369,238 @@ def zscore(arr: np.ndarray) -> np.ndarray:
     Returns:
         numpy.ndarray: z-scored values with the same shape as `arr`.
     """
+    arr = arr.astype(float, copy=False)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return np.zeros_like(arr, dtype=float)
     m = np.nanmean(arr)
     s = np.nanstd(arr)
     if s < 1e-12:
-        return np.zeros_like(arr)
-    return (arr - m) / s
+        return np.zeros_like(arr, dtype=float)
+    scored = (arr - m) / s
+    scored[~finite] = 0.0
+    return scored
+
+
+def nanmean_or_nan(values: List[float]) -> float:
+    """Return nanmean without runtime warnings when every value is NaN."""
+    if not values:
+        return float("nan")
+    arr = np.asarray(values, dtype=float)
+    if not np.isfinite(arr).any():
+        return float("nan")
+    return float(np.nanmean(arr))
+
+
+def build_result_row(
+    cfg_id: int,
+    cfg: Dict[str, Any],
+    errs: int,
+    dataset_size: int,
+    tok_lens: List[int],
+    origins: List[Dict[str, float | int]],
+    decode: bool,
+    note_losses: List[float],
+    tempo_diffs: List[float],
+    timesig_diffs: List[float],
+    chroma_dtw_scores: List[float],
+    precisions: List[float],
+    recalls: List[float],
+    f1s: List[float],
+    onset_mae_secs: List[float],
+    dur_mae_secs: List[float],
+) -> Dict[str, Any]:
+    """Assemble the per-config metrics row from accumulated metrics."""
+    n_ok = dataset_size - errs
+    if n_ok == 0:
+        tokens_per_second = np.nan
+        med = np.nan
+        p95 = np.nan
+        chroma_dtw_score = np.nan
+        precision = np.nan
+        recall = np.nan
+        f1 = np.nan
+        onset_mae_sec = np.nan
+        dur_mae_sec = np.nan
+    else:
+        total_seconds = float(sum(float(o["seconds"]) for o in origins))
+        total_tokens = float(sum(tok_lens))
+        tokens_per_second = total_tokens / max(1e-9, total_seconds)
+        med = float(statistics.median(tok_lens))
+        p95 = float(np.percentile(tok_lens, 95))
+        chroma_dtw_score = nanmean_or_nan(chroma_dtw_scores)
+        precision = nanmean_or_nan(precisions)
+        recall = nanmean_or_nan(recalls)
+        f1 = nanmean_or_nan(f1s)
+        onset_mae_sec = nanmean_or_nan(onset_mae_secs)
+        dur_mae_sec = nanmean_or_nan(dur_mae_secs)
+
+    return dict(
+        id=cfg_id,
+        error_rate=errs / dataset_size,
+        tokens_per_second=tokens_per_second,
+        median_tokens_per_file=med,
+        p95_tokens_per_file=p95,
+        note_loss_rate=float(
+            np.nan if not decode or len(note_losses) == 0 else nanmean_or_nan(note_losses)
+        ),
+        tempo_diff=float(
+            np.nan if not decode or len(tempo_diffs) == 0 else nanmean_or_nan(tempo_diffs)
+        ),
+        timesig_diff=float(
+            np.nan
+            if not decode or len(timesig_diffs) == 0
+            else nanmean_or_nan(timesig_diffs)
+        ),
+        chroma_dtw_score=chroma_dtw_score,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        onset_mae_sec=onset_mae_sec,
+        dur_mae_sec=dur_mae_sec,
+        **flatten_config(cfg),
+    )
+
+
+def init_worker(
+    file_paths: List[Path],
+    origins: List[Dict[str, float | int]],
+    decode: bool,
+) -> None:
+    """Initialize worker-global dataset state for per-config evaluation."""
+    global _WORKER_FILE_PATHS, _WORKER_ORIGINS, _WORKER_DECODE, _WORKER_SCORES
+    _WORKER_FILE_PATHS = file_paths
+    _WORKER_ORIGINS = origins
+    _WORKER_DECODE = decode
+    _WORKER_SCORES = None
+
+
+def get_worker_scores() -> List[Tuple[Path, Score]]:
+    """Load worker Score objects once per process and reuse them across configs."""
+    global _WORKER_SCORES
+    if _WORKER_SCORES is None:
+        _WORKER_SCORES = [(path, Score(path)) for path in _WORKER_FILE_PATHS]
+    return _WORKER_SCORES
+
+
+def evaluate_config_worker(task: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
+    """Evaluate one tokenizer config inside a worker process."""
+    cfg_id, cfg = task
+    dataset_scores = get_worker_scores()
+    origins = _WORKER_ORIGINS
+    decode = _WORKER_DECODE
+
+    tok_lens: List[int] = []
+    errs = 0
+    note_losses: List[float] = []
+    tempo_diffs: List[float] = []
+    timesig_diffs: List[float] = []
+    precisions: List[float] = []
+    recalls: List[float] = []
+    f1s: List[float] = []
+    onset_mae_secs: List[float] = []
+    dur_mae_secs: List[float] = []
+    chroma_dtw_scores: List[float] = []
+    decode_warnings: List[Tuple[str, str]] = []
+    tokenization_warnings: List[str] = []
+
+    try:
+        tokenizer = make_tokenizer(cfg)
+    except Exception:
+        return {
+            "status": "bad_config",
+            "id": cfg_id,
+            "config": cfg,
+            "traceback": traceback.format_exc(),
+        }
+
+    with tempfile.TemporaryDirectory(prefix=f"autotune_miditok_cfg_{cfg_id}_") as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        for file_idx, ((path, score), orig) in enumerate(zip(dataset_scores, origins)):
+            try:
+                toks = tokenizer(score)
+                total_length = 0
+                if isinstance(toks, list):
+                    for track in toks:
+                        total_length += len(track)
+                else:
+                    total_length = len(toks)
+
+                tok_lens.append(total_length)
+
+                if decode:
+                    try:
+                        dec = tokenizer.decode(toks)
+                        dec_path = tmpdir_path / f"file_{file_idx}.mid"
+                        dec.dump_midi(str(dec_path))
+                        dec_pretty = PrettyMIDI(str(dec_path))
+                        n_loss = abs(count_notes(dec_pretty) - int(orig["notes"])) / max(
+                            1, int(orig["notes"])
+                        )
+                        t_diff = abs(count_tempos(dec_pretty) - int(orig["tempos"]))
+                        s_diff = abs(count_timesigs(dec_pretty) - int(orig["timesigs"]))
+                        onset_metrics = midi_roundtrip_metrics_onset_chroma(
+                            original_mid=PrettyMIDI(str(path)),
+                            reconstructed_mid=dec_pretty,
+                            onset_tol=0.03,
+                            include_drums=True,
+                            fs_chroma=2,
+                            calculate_transpose_invariant_chroma=False,
+                            max_len_s=None,
+                        )
+                        precisions.append(onset_metrics["precision"])
+                        recalls.append(onset_metrics["recall"])
+                        f1s.append(onset_metrics["f1"])
+                        onset_mae_secs.append(
+                            onset_metrics["onset_mae_sec"]
+                            if onset_metrics["onset_mae_sec"] is not None
+                            else np.nan
+                        )
+                        dur_mae_secs.append(
+                            onset_metrics["dur_mae_sec"]
+                            if onset_metrics["dur_mae_sec"] is not None
+                            else np.nan
+                        )
+                        chroma_dtw_scores.append(
+                            onset_metrics["chroma_dtw"]
+                            if onset_metrics["chroma_dtw"] is not None
+                            else np.nan
+                        )
+                    except Exception as e:
+                        n_loss, t_diff, s_diff = 1.0, 5.0, 5.0
+                        decode_warnings.append((str(path), str(e)))
+                    note_losses.append(n_loss)
+                    tempo_diffs.append(t_diff)
+                    timesig_diffs.append(s_diff)
+            except Exception:
+                errs += 1
+                tokenization_warnings.append(str(path))
+
+    return {
+        "status": "ok",
+        "id": cfg_id,
+        "config": cfg,
+        "decode_warnings": decode_warnings,
+        "tokenization_warnings": tokenization_warnings,
+        "row": build_result_row(
+            cfg_id,
+            cfg,
+            errs,
+            len(dataset_scores),
+            tok_lens,
+            origins,
+            decode,
+            note_losses,
+            tempo_diffs,
+            timesig_diffs,
+            chroma_dtw_scores,
+            precisions,
+            recalls,
+            f1s,
+            onset_mae_secs,
+            dur_mae_secs,
+        ),
+    }
 
 
 def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
@@ -298,9 +651,9 @@ def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
         + weights.get("w_struct", 1.0) * comp["struct_diff"]
         + weights.get("w_err", 3.0) * comp["error_rate"]
         + weights.get("w_chroma_dtw", 1.0) * (comp["chroma_dtw_score"])
-        + weights.get("w_precision", 1.0) * (comp["precision"])
-        + weights.get("w_recall", 1.0) * (comp["recall"])
-        + weights.get("w_f1", 1.0) * (comp["f1"])
+        - weights.get("w_precision", 1.0) * comp["precision"]
+        - weights.get("w_recall", 1.0) * comp["recall"]
+        - weights.get("w_f1", 1.0) * comp["f1"]
         + weights.get("w_onset_mae", 1.0) * (comp["onset_mae_sec"])
         + weights.get("w_dur_mae", 1.0) * (comp["dur_mae_sec"])
     )
@@ -310,11 +663,32 @@ def rank_configs(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     return df
 
 
+def configure_logging(log_level: str, quiet: bool) -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Attribute controls are not compatible with .*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"You are using a depreciated `miditoolkit\.MidiFile` object\..*",
+        category=UserWarning,
+    )
+    level = logging.ERROR if quiet else getattr(logging, log_level.upper())
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(markup=True, show_path=False)],
+        force=True,
+    )
+
+
 def main():
     """CLI entrypoint: sweep tokenizer configs, evaluate and rank them.
 
     This function parses command-line arguments, loads a sample of MIDI files
-    from `--input` (up to `--max-files`), precomputes baseline features
+    from `--input-list` (up to `--max-files`), precomputes baseline features
     (notes, tempo/time signature counts, duration), then iterates over the
     configuration grid. For each config it attempts to construct a REMI
     tokenizer, tokenize each MIDI and optionally decode back to MIDI to
@@ -333,10 +707,10 @@ def main():
         description="Auto-tune Miditok REMI configs for a MIDI dataset."
     )
     p.add_argument(
-        "--input", type=Path, required=True, help="Folder with .mid/.midi files"
-    )
-    p.add_argument(
-        "--extensions", nargs="+", default=[".mid", ".midi"], help="File extensions"
+        "--input-list",
+        type=Path,
+        required=True,
+        help="Text file of MIDI paths, relative to the list file or absolute.",
     )
     p.add_argument(
         "--max-files", type=int, default=200, help="Evaluate at most N files"
@@ -346,7 +720,9 @@ def main():
     )
     p.add_argument(
         "--no-decode",
+        dest="decode",
         action="store_false",
+        default=True,
         help="Skip round-trip decoding metrics (faster)",
     )
     p.add_argument(
@@ -355,34 +731,54 @@ def main():
         default=None,
         help='JSON like {"w_len":1,"w_len_p95":0.5,"w_loss":2,"w_struct":1,"w_err":3}',
     )
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Console logging level.",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only show errors and disable progress bars.",
+    )
+    p.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="Number of worker processes to use for evaluating configs. 0 = auto.",
+    )
     p.add_argument("--outdir", type=Path, required=True, help="Where to save results")
     args = p.parse_args()
 
+    configure_logging(args.log_level, args.quiet)
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     # Collect files
-    exts = {e.lower() for e in args.extensions}
-    files = [p for p in args.input.rglob("*") if p.suffix.lower() in exts]
+    files = load_midi_paths_from_list(args.input_list)
     files.sort()
-    if not files:
-        raise SystemExit("No MIDI files found.")
     if args.max_files:
         files = files[: args.max_files]
 
     # Prepare dataset stats
     dataset_midis: List[Tuple[Path, MidiFile]] = []
-    iterator = files
-    if HAS_TQDM:
-        iterator = tqdm(files, desc="Loading MIDIs")
+    iterator = progress_iter(
+        files,
+        total=len(files),
+        description="Loading MIDIs",
+        enabled=not args.quiet,
+    )
     for f in iterator:
         try:
             m = load_midi(f)
             dataset_midis.append((f, m))
         except Exception:
-            print(f"[WARN] Failed to load {f}:\n{traceback.format_exc()}")
+            LOGGER.warning("Failed to load %s", f)
+            LOGGER.debug("Load traceback for %s\n%s", f, traceback.format_exc())
 
     if not dataset_midis:
         raise SystemExit("No valid MIDI files could be loaded.")
+    LOGGER.info("Loaded %d MIDI files from %s", len(dataset_midis), args.input_list)
 
     # Precompute original dataset features
     origins = []
@@ -408,8 +804,19 @@ def main():
             raise SystemExit(
                 "--grid-file must contain a JSON list of TokenizerConfig dicts"
             )
+        grid = normalize_grid(grid)
     else:
         grid = default_grid()
+
+    valid_configs, invalid_count = filter_valid_configs(grid)
+    if not valid_configs:
+        raise SystemExit("No valid tokenizer configs remain after validation.")
+    if invalid_count > 0:
+        LOGGER.info(
+            "Dropped %d invalid tokenizer configs before evaluation; %d valid configs remain",
+            invalid_count,
+            len(valid_configs),
+        )
 
     weights = {
         "w_len": 1.0,
@@ -428,205 +835,116 @@ def main():
         try:
             weights.update(json.loads(args.weights))
         except Exception:
-            print("[WARN] Failed to parse --weights; using defaults.")
+            LOGGER.warning("Failed to parse --weights; using defaults.")
 
     rows = []
-    per_config_detail = []
+    configs_by_id = {cfg_id: cfg for cfg_id, cfg in valid_configs}
+    worker_count = min(resolve_jobs(args.jobs), len(grid))
+    LOGGER.info(
+        "Evaluating %d tokenizer configs using %d worker process(es)",
+        len(valid_configs),
+        worker_count,
+    )
 
-    grid_iter = grid
-    if HAS_TQDM:
-        grid_iter = tqdm(grid, desc="Configs")
-    f = tempfile.NamedTemporaryFile(suffix=".mid", delete=False) # For storing decoded MIDIs temporarily
-    for i, cfg in enumerate(grid_iter):
-        # Tokenize all, collect metrics
-        tok_lens: List[int] = []
-        errs = 0
-        note_losses = []
-        tempo_diffs = []
-        timesig_diffs = []
-        precisions = []
-        recalls = []
-        f1s = []
-        onset_mae_secs = []
-        dur_mae_secs = []
-        chroma_dtw_scores = []
-        try:
-            tokenizer = make_tokenizer(cfg)
-        except Exception:
-            print(f"[WARN] Bad tokenizer config {cfg}:\n{traceback.format_exc()}")
-            args.outdir.joinpath("tokenization_configs_errors").mkdir(
-                parents=True, exist_ok=True
+    args.outdir.joinpath("tokenization_configs").mkdir(parents=True, exist_ok=True)
+    for i, cfg in configs_by_id.items():
+        with open(
+            args.outdir / "tokenization_configs" / f"{i}.yaml",
+            "w",
+            encoding="utf-8",
+        ) as fh:
+            yaml.dump(cfg, stream=fh, sort_keys=False)
+
+    if worker_count == 1:
+        init_worker(files, origins, args.decode)
+        result_iter = progress_iter(
+            valid_configs,
+            total=len(valid_configs),
+            description="Configs",
+            enabled=not args.quiet,
+        )
+        completed_results = [evaluate_config_worker(task) for task in result_iter]
+    else:
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=init_worker,
+            initargs=(files, origins, args.decode),
+        ) as pool:
+            futures = [
+                pool.submit(evaluate_config_worker, task) for task in valid_configs
+            ]
+            result_iter = progress_iter(
+                as_completed(futures),
+                total=len(futures),
+                description="Configs",
+                enabled=not args.quiet,
             )
-            yaml.dump(
-                cfg,
-                encoding="utf-8",
-                stream=open(f"{args.outdir}/tokenization_configs_errors/{i}.yaml", "w"),
-            )
-            rows.append(
-                dict(
-                    id=i,
-                    error_rate=1.0,
-                    tokens_per_second=np.nan,
-                    median_tokens_per_file=np.nan,
-                    p95_tokens_per_file=np.nan,
-                    note_loss_rate=np.nan,
-                    tempo_diff=np.nan,
-                    timesig_diff=np.nan,
-                )
+            completed_results = [future.result() for future in result_iter]
+
+    for result in completed_results:
+        cfg_id = int(result["id"])
+        cfg = configs_by_id[cfg_id]
+        if result["status"] == "bad_config":
+            LOGGER.warning(
+                "Config id=%d failed validation during worker startup and was skipped",
+                cfg_id,
             )
             continue
-        
-        for (path, midi), orig in zip(dataset_midis, origins):
-            try:
-                toks = tokenizer(midi)
-                total_length = 0
-                if isinstance(toks, list):
-                    for track in toks:
-                        total_length += len(track)
-                else:
-                    total_length = len(toks)
 
-                tok_lens.append(total_length)
+        for path_str in result.get("tokenization_warnings", []):
+            LOGGER.warning("Tokenization failed for config id=%d on %s", cfg_id, path_str)
+        for path_str, message in result.get("decode_warnings", []):
+            LOGGER.warning("Decode failed for %s: %s", path_str, message)
 
-                if not args.no_decode:
-                    try:
-                        dec = tokenizer.decode(toks)
-                        dumped_midi = dec.dump_midi(f.name)
-                        dec_pretty = PrettyMIDI(dumped_midi)
-                        n_loss = abs(count_notes(dec_pretty) - orig["notes"]) / max(
-                            1, orig["notes"]
-                        )
-                        t_diff = abs(count_tempos(dec_pretty) - orig["tempos"])
-                        s_diff = abs(count_timesigs(dec_pretty) - orig["timesigs"])
-                        onset_metrics = midi_roundtrip_metrics_onset_chroma(
-                            original_mid=PrettyMIDI(str(path)),
-                            reconstructed_mid=dec_pretty,
-                            onset_tol=0.03,
-                            include_drums=True,
-                            fs_chroma=2,
-                            calculate_transpose_invariant_chroma=False,
-                            max_len_s=None,
-                        )
-                        precisions.append(onset_metrics["precision"])
-                        recalls.append(onset_metrics["recall"])
-                        f1s.append(onset_metrics["f1"])
-                        onset_mae_secs.append(
-                            onset_metrics["onset_mae_sec"]
-                            if onset_metrics["onset_mae_sec"] is not None
-                            else np.nan
-                        )
-                        dur_mae_secs.append(
-                            onset_metrics["dur_mae_sec"]
-                            if onset_metrics["dur_mae_sec"] is not None
-                            else np.nan
-                        )
-                        chroma_dtw_scores.append(
-                            onset_metrics["chroma_dtw"]
-                            if onset_metrics["chroma_dtw"] is not None
-                            else np.nan
-                        )
-                    except Exception as e:
-                        # If decode fails, count as a full error for that item
-                        n_loss, t_diff, s_diff = 1.0, 5.0, 5.0
-                        print('exception occurred line 527 for the file: ', path, '\n', str(e))
-                    note_losses.append(n_loss)
-                    tempo_diffs.append(t_diff)
-                    timesig_diffs.append(s_diff)
-
-            except Exception:
-                errs += 1
-                # continue to next file
-
-        n_ok = len(dataset_midis) - errs
-        if n_ok == 0:
-            tokens_per_second = np.nan
-            med = np.nan
-            p95 = np.nan
-            chroma_dtw_score = np.nan
-            prescision = np.nan
-            recall = np.nan
-            f1 = np.nan
-            onset_mae_sec = np.nan
-            dur_mae_sec = np.nan
-        else:
-            total_seconds = float(sum(o["seconds"] for o in origins))
-            total_tokens = float(sum(tok_lens))
-            tokens_per_second = total_tokens / max(1e-9, total_seconds)
-            med = float(statistics.median(tok_lens))
-            p95 = float(np.percentile(tok_lens, 95))
-            chroma_dtw_score = (
-                float(np.mean(chroma_dtw_scores)) if chroma_dtw_scores else np.nan
-            )
-            prescision = float(np.mean(precisions)) if precisions else np.nan
-            recall = float(np.mean(recalls)) if recalls else np.nan
-            f1 = float(np.mean(f1s)) if f1s else np.nan
-            onset_mae_sec = float(np.mean(onset_mae_secs)) if onset_mae_secs else np.nan
-            dur_mae_sec = float(np.mean(dur_mae_secs)) if dur_mae_secs else np.nan
-        args.outdir.joinpath("tokenization_configs").mkdir(parents=True, exist_ok=True)
-        yaml.dump(
-            cfg,
-            encoding="utf-8",
-            stream=open(f"{args.outdir}/tokenization_configs/{i}.yaml", "w"),
-        )
-        row = dict(
-            id=i,
-            error_rate=errs / len(dataset_midis),
-            tokens_per_second=tokens_per_second,
-            median_tokens_per_file=med,
-            p95_tokens_per_file=p95,
-            note_loss_rate=float(
-                np.nan
-                if args.no_decode or len(note_losses) == 0
-                else np.mean(note_losses)
-            ),
-            tempo_diff=float(
-                np.nan
-                if args.no_decode or len(tempo_diffs) == 0
-                else np.mean(tempo_diffs)
-            ),
-            timesig_diff=float(
-                np.nan
-                if args.no_decode or len(timesig_diffs) == 0
-                else np.mean(timesig_diffs)
-            ),
-            chroma_dtw_score=chroma_dtw_score,
-            precision=prescision,
-            recall=recall,
-            f1=f1,
-            onset_mae_sec=onset_mae_sec,
-            dur_mae_sec=dur_mae_sec,
-        )
+        row = result["row"]
         rows.append(row)
-        per_config_detail.append(
-            {
-                "config": cfg,
-                "per_file_token_lengths": tok_lens,
-                "errs": errs,
-            }
+        LOGGER.info(
+            "Config %d finished: error_rate=%.3f tokens_per_second=%s score_pending",
+            cfg_id,
+            row["error_rate"],
+            f"{row['tokens_per_second']:.2f}"
+            if np.isfinite(row["tokens_per_second"])
+            else "nan",
         )
 
     df = pd.DataFrame(rows)
-    df.to_csv(args.outdir / "results.csv", index=False)
-
-    # Rank
     ranked = rank_configs(df, weights)
     ranked.to_csv(args.outdir / "results_ranked.csv", index=False)
 
     # Save best config
     if len(ranked) > 0:
-        print("Best config (lowest score):", int(ranked.iloc[0]["id"]))
+        best_id = int(ranked.iloc[0]["id"])
+        best_cfg = configs_by_id[best_id]
+        LOGGER.info("Best config (lowest score): %d", best_id)
+        (args.outdir / "best_config.json").write_text(
+            json.dumps(to_jsonable(best_cfg), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        with open(args.outdir / "best_config.yaml", "w", encoding="utf-8") as fh:
+            yaml.dump(best_cfg, stream=fh, sort_keys=False)
+        with open(args.outdir / "best_tokenizer.yaml", "w", encoding="utf-8") as fh:
+            yaml.dump(
+                {
+                    "tokenizer": "REMI",
+                    "tokenizer_config": best_cfg,
+                    "additional_params": {},
+                },
+                stream=fh,
+                sort_keys=False,
+            )
 
     # Also drop a quick README
     (args.outdir / "README.md").write_text(
         "# Auto-tuning results\n\n"
-        "- `results.csv`: raw metrics per config\n"
-        "- `results_ranked.csv`: same, with `score` and sorted (lower is better)\n"
-        "- `best_config.json`: the winning TokenizerConfig dict to use with Miditok REMI\n\n"
+        "- `results_ranked.csv`: ranked metrics per config with `score` (lower is better)\n"
+        "- `best_config.json`: JSON-safe winning TokenizerConfig dict for inspection\n"
+        "- `best_config.yaml`: winning TokenizerConfig dict with Python tuple keys preserved\n"
+        "- `best_tokenizer.yaml`: winning config in this repo's MidiTokBuilder format\n\n"
         "Edit weights via `--weights` to reflect your priorities.\n",
         encoding="utf-8",
     )
 
-    print("Done. Wrote:", args.outdir)
+    LOGGER.info("Done. Wrote: %s", args.outdir)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,20 @@
+beat_res:
+  ? !!python/tuple
+  - 0
+  - 4
+  : 8
+  ? !!python/tuple
+  - 4
+  - 12
+  : 4
+num_velocities: 16
+use_chords: false
+use_rests: false
+use_tempos: true
+num_tempos: 32
+log_tempos: false
+use_time_signatures: true
+use_programs: true
+one_token_stream_for_programs: true
+program_changes: false
+use_pitchdrum_tokens: true

@@ -219,3 +219,5 @@ __marimo__/
 /data/
 LMD_CLEAN/
 /cache_chunks/
+# Cache files
+*cache.jsonl
