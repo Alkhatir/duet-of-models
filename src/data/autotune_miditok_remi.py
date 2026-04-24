@@ -188,11 +188,17 @@ def load_midi(path: Path) -> MidiFile:
 def default_grid() -> List[Dict[str, Any]]:
     """Build and return a list of TokenizerConfig-style dictionaries.
 
-    The function enumerates a small but useful cross-product of common
-    tokenizer options (beat resolutions, velocity quantization bins, and
-    boolean toggles such as using chords/rests/tempos/time-signatures/and
-    program changes). Each returned dict is intended to be passed as
-    kwargs into `miditok.TokenizerConfig`.
+    This grid is tuned for REMI+ style multitrack tokenization on LMD-like
+    datasets. It focuses on the parameters that most strongly affect sequence
+    length and round-trip fidelity for multitrack symbolic music:
+
+    - beat resolution
+    - valid rest token resolutions
+    - velocity quantization
+    - program token style
+
+    Less impactful or more expensive knobs (e.g. chord tokens) are left fixed
+    for the first-pass search and can be explored later on shortlisted configs.
 
     Notes:
     - Keep this grid compact to make experiments fast. Expand or provide a
@@ -203,38 +209,56 @@ def default_grid() -> List[Dict[str, Any]]:
     """
     grids = []
     beat_res_opts = [
-        {(0, 4): 8, (4, 12): 4},
-        {(0, 4): 4, (4, 12): 4},
-        {(0, 4): 12, (4, 12): 6},
+        {
+            "beat_res": {(0, 4): 8, (4, 12): 4},
+            "rest_variants": [
+                {
+                    "use_rests": False,
+                },
+                {
+                    "use_rests": True,
+                    "beat_res_rest": {(0, 1): 8, (1, 2): 4, (2, 12): 2},
+                },
+            ],
+        },
+        {
+            "beat_res": {(0, 4): 12, (4, 12): 6},
+            "rest_variants": [
+                {
+                    "use_rests": False,
+                },
+                {
+                    "use_rests": True,
+                    "beat_res_rest": {(0, 1): 12, (1, 2): 6, (2, 12): 3},
+                },
+            ],
+        },
     ]
-    nb_vels = [16, 32, 64]
-    chords = [True, False]
-    rests = [True, False]
-    tempos = [True]
-    timesigs = [True]
-    programs = [True]
+    num_velocities_opts = [16, 32]
+    program_changes_opts = [False, True]
 
-    for br in beat_res_opts:
-        for nv in nb_vels:
-            for uc in chords:
-                for ur in rests:
-                    for ut in tempos:
-                        for uts in timesigs:
-                            for up in programs:
-                                grids.append(
-                                    dict(
-                                        # `beat_res` controls resolution mapping by bar ranges
-                                        beat_res=br,
-                                        # number of velocity bins to quantize velocities
-                                        num_velocities=nv,
-                                        # boolean toggles that enable/disable tokens
-                                        use_chords=uc,
-                                        use_rests=ur,
-                                        use_tempos=ut,
-                                        use_time_signatures=uts,
-                                        use_programs=up,
-                                    )
-                                )
+    for beat_res_entry in beat_res_opts:
+        beat_res = beat_res_entry["beat_res"]
+        for rest_cfg in beat_res_entry["rest_variants"]:
+            for num_velocities in num_velocities_opts:
+                for program_changes in program_changes_opts:
+                    cfg = dict(
+                        beat_res=beat_res,
+                        num_velocities=num_velocities,
+                        use_chords=False,
+                        use_rests=rest_cfg["use_rests"],
+                        use_tempos=True,
+                        num_tempos=32,
+                        log_tempos=False,
+                        use_time_signatures=True,
+                        use_programs=True,
+                        one_token_stream_for_programs=True,
+                        program_changes=program_changes,
+                        use_pitchdrum_tokens=True,
+                    )
+                    if "beat_res_rest" in rest_cfg:
+                        cfg["beat_res_rest"] = rest_cfg["beat_res_rest"]
+                    grids.append(cfg)
     return grids
 
 
