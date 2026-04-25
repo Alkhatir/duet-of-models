@@ -1,7 +1,7 @@
-embedding_dim: 128
-num_blocks: 4
+embedding_dim: 192
+num_blocks: 6
 dropout: 0.1
-slstm_at: [1]
+slstm_at: [1, 4]
 mlstm_block:
   mlstm:
     conv1d_kernel_size: 4
