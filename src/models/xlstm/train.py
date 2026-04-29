@@ -33,6 +33,12 @@ def load_resolved_config(model_cfg_path: str, train_cfg_path: str) -> DictConfig
     return cfg
 
 
+def apply_run_paths(cfg: DictConfig, output_dir: Path) -> DictConfig:
+    cfg.output_dir = str(output_dir)
+    cfg.run_name = output_dir.name
+    return cfg
+
+
 def resolve_device(device_name: str) -> torch.device:
     if device_name.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError(
@@ -528,9 +534,15 @@ def main() -> None:
         required=True,
         help="Path to the file containing test MIDI paths.",
     )
+    parser.add_argument(
+        "--output_dir",
+        required=True,
+        help="Directory where checkpoints, resolved config, and metrics are written.",
+    )
     args = parser.parse_args()
 
     cfg = load_resolved_config(args.cfg, args.train_cfg)
+    cfg = apply_run_paths(cfg, Path(args.output_dir))
     metrics = train(
         cfg,
         train_list_path=Path(args.train_list),
