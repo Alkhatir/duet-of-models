@@ -253,7 +253,6 @@ def evaluate(
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
-    total_batches = 0
     total_valid_tokens = 0.0
     total_token_accuracy = 0.0
     total_top5_accuracy = 0.0
@@ -266,15 +265,15 @@ def evaluate(
                 logits = model(input_ids)
                 loss = compute_loss(logits, labels)
             batch_metrics = compute_batch_metrics(logits, labels)
-            total_loss += float(loss.item())
-            total_batches += 1
-            total_valid_tokens += batch_metrics["valid_tokens"]
-            total_token_accuracy += batch_metrics["token_accuracy"] * batch_metrics["valid_tokens"]
-            total_top5_accuracy += batch_metrics["top5_token_accuracy"] * batch_metrics["valid_tokens"]
-            total_mean_confidence += batch_metrics["mean_token_confidence"] * batch_metrics["valid_tokens"]
+            valid_tokens = batch_metrics["valid_tokens"]
+            total_loss += float(loss.item()) * valid_tokens
+            total_valid_tokens += valid_tokens
+            total_token_accuracy += batch_metrics["token_accuracy"] * valid_tokens
+            total_top5_accuracy += batch_metrics["top5_token_accuracy"] * valid_tokens
+            total_mean_confidence += batch_metrics["mean_token_confidence"] * valid_tokens
 
-    avg_loss = total_loss / max(total_batches, 1)
     denom = max(total_valid_tokens, 1.0)
+    avg_loss = total_loss / denom
     return {
         "loss": avg_loss,
         "perplexity": math.exp(min(20.0, avg_loss)),
@@ -350,6 +349,8 @@ def train(
 
     global_step = 0
     running_loss = 0.0
+    best_val_loss = float("inf")
+    best_val_metrics: dict[str, float] | None = None
     train_bar = tqdm(range(epochs), desc="Epochs")
     for epoch in train_bar:
         batch_bar = tqdm(train_loader, desc=f"Train {epoch + 1}/{epochs}", leave=False)
@@ -409,6 +410,24 @@ def train(
                 ) """
                 if wandb_run is not None:
                     wandb_run.log(val_log, step=global_step)
+                if val_metrics["loss"] < best_val_loss:
+                    best_val_loss = val_metrics["loss"]
+                    best_val_metrics = val_metrics
+                    save_artifacts(
+                        model,
+                        optimizer,
+                        cfg,
+                        output_dir / "best",
+                        global_step,
+                        {
+                            "global_step": global_step,
+                            "val_loss": val_metrics["loss"],
+                            "val_perplexity": val_metrics["perplexity"],
+                            "val_token_accuracy": val_metrics["token_accuracy"],
+                            "val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
+                            "val_mean_token_confidence": val_metrics["mean_token_confidence"],
+                        },
+                    )
 
             if global_step % save_steps == 0:
                 save_artifacts(
@@ -420,29 +439,60 @@ def train(
                 )
 
     val_metrics = evaluate(model, val_loader, cfg, device)
-    test_metrics = evaluate(model, test_loader, cfg, device)
+    if val_metrics["loss"] < best_val_loss:
+        best_val_loss = val_metrics["loss"]
+        best_val_metrics = val_metrics
+        save_artifacts(
+            model,
+            optimizer,
+            cfg,
+            output_dir / "best",
+            global_step,
+            {
+                "global_step": global_step,
+                "val_loss": val_metrics["loss"],
+                "val_perplexity": val_metrics["perplexity"],
+                "val_token_accuracy": val_metrics["token_accuracy"],
+                "val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
+                "val_mean_token_confidence": val_metrics["mean_token_confidence"],
+            },
+        )
+
     final_metrics = {
         "global_step": global_step,
-        "val_loss": val_metrics["loss"],
-        "val_perplexity": val_metrics["perplexity"],
-        "val_token_accuracy": val_metrics["token_accuracy"],
-        "val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
-        "val_mean_token_confidence": val_metrics["mean_token_confidence"],
-        "test_loss": test_metrics["loss"],
-        "test_perplexity": test_metrics["perplexity"],
-        "test_token_accuracy": test_metrics["token_accuracy"],
-        "test_top5_token_accuracy": test_metrics["top5_token_accuracy"],
-        "test_mean_token_confidence": test_metrics["mean_token_confidence"],
+        "final_val_loss": val_metrics["loss"],
+        "final_val_perplexity": val_metrics["perplexity"],
+        "final_val_token_accuracy": val_metrics["token_accuracy"],
+        "final_val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
+        "final_val_mean_token_confidence": val_metrics["mean_token_confidence"],
+        "best_val_loss": best_val_loss,
+        "best_val_perplexity": (
+            best_val_metrics["perplexity"] if best_val_metrics is not None else val_metrics["perplexity"]
+        ),
+        "best_val_token_accuracy": (
+            best_val_metrics["token_accuracy"] if best_val_metrics is not None else val_metrics["token_accuracy"]
+        ),
+        "best_val_top5_token_accuracy": (
+            best_val_metrics["top5_token_accuracy"]
+            if best_val_metrics is not None
+            else val_metrics["top5_token_accuracy"]
+        ),
+        "best_val_mean_token_confidence": (
+            best_val_metrics["mean_token_confidence"]
+            if best_val_metrics is not None
+            else val_metrics["mean_token_confidence"]
+        ),
+        "test_evaluated": False,
+        "test_note": "Test split is not evaluated during training. Run a separate evaluation on the selected checkpoint.",
     }
     save_artifacts(model, optimizer, cfg, output_dir, global_step, final_metrics)
     if wandb_run is not None:
         wandb_run.log(
             {
-                "test/loss": test_metrics["loss"],
-                "test/perplexity": test_metrics["perplexity"],
-                "test/token_accuracy": test_metrics["token_accuracy"],
-                "test/top5_token_accuracy": test_metrics["top5_token_accuracy"],
-                "test/mean_token_confidence": test_metrics["mean_token_confidence"],
+                "final/val_loss": val_metrics["loss"],
+                "final/val_perplexity": val_metrics["perplexity"],
+                "best/val_loss": final_metrics["best_val_loss"],
+                "best/val_perplexity": final_metrics["best_val_perplexity"],
             },
             step=global_step,
         )
