@@ -265,13 +265,25 @@ def init_wandb_run(
     run_config["train_list"] = str(train_list_path)
     run_config["val_list"] = str(val_list_path)
     run_config["tokenizer_config_path"] = tok_cfg
-    return wandb.init(
-        project="duet-of-models-xlstm",
+    run = wandb.init(
+        project=str(cfg.get("wandb_project", "duet-of-models-xlstm")),
         name=cfg.get("run_name", None),
         config=run_config,
-        reinit=True,
-        settings=wandb.Settings(start_method="fork"),
+        reinit="finish_previous",
     )
+    run.define_metric("step")
+    run.define_metric("epoch")
+    run.define_metric("train/*", step_metric="step")
+    run.define_metric("val/*", step_metric="step")
+    run.define_metric("best/*", step_metric="step")
+    run.define_metric("final/*", step_metric="step")
+    run.define_metric("progress/*", step_metric="step")
+    run.summary["output_dir"] = str(cfg.output_dir)
+    run.summary["run_name"] = str(cfg.get("run_name", ""))
+    run.summary["train_list"] = str(train_list_path)
+    run.summary["val_list"] = str(val_list_path)
+    run.summary["tokenizer_config_path"] = tok_cfg
+    return run
 
 
 def evaluate(
@@ -371,6 +383,29 @@ def train(
     save_steps = max(1, int(cfg.train.get("save_steps", eval_steps)))
     max_grad_norm = float(cfg.train.get("max_grad_norm", 0.0))
     epochs = int(cfg.train.get("num_train_epochs", 1))
+    steps_per_epoch = len(train_loader)
+    total_train_steps = steps_per_epoch * epochs
+    val_steps = len(val_loader)
+
+    if wandb_run is not None:
+        wandb_run.summary["model/num_parameters"] = sum(
+            param.numel() for param in model.parameters()
+        )
+        wandb_run.summary["model/trainable_parameters"] = sum(
+            param.numel() for param in model.parameters() if param.requires_grad
+        )
+        wandb_run.summary["data/train_batches_per_epoch"] = steps_per_epoch
+        wandb_run.summary["data/val_batches"] = val_steps
+        wandb_run.summary["data/train_batch_size"] = int(
+            cfg.train.per_device_train_batch_size
+        )
+        wandb_run.summary["data/eval_batch_size"] = int(
+            cfg.train.get(
+                "per_device_eval_batch_size", cfg.train.per_device_train_batch_size
+            )
+        )
+        wandb_run.summary["data/block_size"] = int(cfg.data.block_size)
+        wandb_run.summary["train/total_steps"] = total_train_steps
 
     global_step = 0
     running_loss = 0.0
@@ -390,8 +425,11 @@ def train(
                 loss = compute_loss(logits, labels)
 
             loss.backward()
+            grad_norm = None
             if max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_grad_norm
+                )
             optimizer.step()
             if scheduler is not None:
                 scheduler.step()
@@ -399,15 +437,25 @@ def train(
             global_step += 1
             running_loss += float(loss.item())
             batch_bar.set_postfix(loss=f"{loss.item():.4f}")
+            epoch_progress = global_step / max(steps_per_epoch, 1)
 
             if global_step % logging_steps == 0:
                 avg_train_loss = running_loss / logging_steps
                 train_log = {
                     "step": global_step,
+                    "epoch": epoch_progress,
                     "train/loss": avg_train_loss,
                     "train/perplexity": math.exp(min(20.0, avg_train_loss)),
                     "train/lr": optimizer.param_groups[0]["lr"],
+                    "train/batch_loss": float(loss.item()),
+                    "train/valid_tokens": float((labels != -100).sum().item()),
+                    "progress/epoch": epoch_progress,
+                    "progress/percent": (
+                        100.0 * global_step / max(total_train_steps, 1)
+                    ),
                 }
+                if grad_norm is not None:
+                    train_log["train/grad_norm"] = float(grad_norm)
                 """ print(
                     f"step={global_step} train_loss={train_log['train/loss']:.4f} "
                     f"train_perplexity={train_log['train/perplexity']:.4f} "
@@ -421,11 +469,13 @@ def train(
                 val_metrics = evaluate(model, val_loader, cfg, device)
                 val_log = {
                     "step": global_step,
+                    "epoch": epoch_progress,
                     "val/loss": val_metrics["loss"],
                     "val/perplexity": val_metrics["perplexity"],
                     "val/token_accuracy": val_metrics["token_accuracy"],
                     "val/top5_token_accuracy": val_metrics["top5_token_accuracy"],
                     "val/mean_token_confidence": val_metrics["mean_token_confidence"],
+                    "val/valid_tokens": val_metrics["valid_tokens"],
                 }
                 """ print(
                     f"step={global_step} val_loss={val_log['val/loss']:.4f} "
@@ -438,6 +488,27 @@ def train(
                 if val_metrics["loss"] < best_val_loss:
                     best_val_loss = val_metrics["loss"]
                     best_val_metrics = val_metrics
+                    if wandb_run is not None:
+                        wandb_run.log(
+                            {
+                                "step": global_step,
+                                "epoch": epoch_progress,
+                                "best/val_loss": val_metrics["loss"],
+                                "best/val_perplexity": val_metrics["perplexity"],
+                                "best/val_token_accuracy": val_metrics[
+                                    "token_accuracy"
+                                ],
+                                "best/val_top5_token_accuracy": val_metrics[
+                                    "top5_token_accuracy"
+                                ],
+                            },
+                            step=global_step,
+                        )
+                        wandb_run.summary["best/global_step"] = global_step
+                        wandb_run.summary["best/val_loss"] = val_metrics["loss"]
+                        wandb_run.summary["best/val_perplexity"] = val_metrics[
+                            "perplexity"
+                        ]
                     save_artifacts(
                         model,
                         optimizer,
@@ -522,13 +593,26 @@ def train(
     if wandb_run is not None:
         wandb_run.log(
             {
+                "step": global_step,
+                "epoch": float(epochs),
                 "final/val_loss": val_metrics["loss"],
                 "final/val_perplexity": val_metrics["perplexity"],
+                "final/val_token_accuracy": val_metrics["token_accuracy"],
+                "final/val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
                 "best/val_loss": final_metrics["best_val_loss"],
                 "best/val_perplexity": final_metrics["best_val_perplexity"],
             },
             step=global_step,
         )
+        wandb_run.summary["final/global_step"] = global_step
+        wandb_run.summary["final/val_loss"] = val_metrics["loss"]
+        wandb_run.summary["final/val_perplexity"] = val_metrics["perplexity"]
+        wandb_run.summary["final/val_token_accuracy"] = val_metrics["token_accuracy"]
+        wandb_run.summary["final/checkpoint_path"] = str(output_dir / "checkpoint.pt")
+        wandb_run.summary["best/checkpoint_path"] = str(
+            output_dir / "best" / "checkpoint.pt"
+        )
+        wandb_run.summary["metrics_path"] = str(output_dir / "metrics.json")
         wandb_run.finish()
     return final_metrics
 
