@@ -1,0 +1,19 @@
+{
+  "block_size": 1024,
+  "test": {
+    "chunk_cache_dir": "cache_chunks/7dadcf017091b96d/test",
+    "chunks": 4707,
+    "midi_files": 200
+  },
+  "tokenizer_vocab_size": 598,
+  "train": {
+    "chunk_cache_dir": "cache_chunks/66128a49782b42cc/train",
+    "chunks": 38672,
+    "midi_files": 1600
+  },
+  "val": {
+    "chunk_cache_dir": "cache_chunks/ab73609e2b4bd603/val",
+    "chunks": 5005,
+    "midi_files": 200
+  }
+}

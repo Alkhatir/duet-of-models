@@ -1,0 +1,36 @@
+tokenizer: REMI
+tokenizer_config:
+  beat_res:
+    ? !!python/tuple
+    - 0
+    - 4
+    : 12
+    ? !!python/tuple
+    - 4
+    - 12
+    : 6
+  num_velocities: 32
+  use_chords: true
+  use_rests: true
+  use_tempos: true
+  num_tempos: 32
+  log_tempos: false
+  use_time_signatures: true
+  use_programs: true
+  one_token_stream_for_programs: true
+  program_changes: false
+  use_pitchdrum_tokens: true
+  beat_res_rest:
+    ? !!python/tuple
+    - 0
+    - 1
+    : 12
+    ? !!python/tuple
+    - 1
+    - 2
+    : 6
+    ? !!python/tuple
+    - 2
+    - 12
+    : 3
+additional_params: {}
