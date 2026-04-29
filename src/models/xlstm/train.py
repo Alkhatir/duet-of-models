@@ -14,8 +14,9 @@ from tqdm import tqdm
 
 from src.data.tokenizer import MidiTokBuilder
 from src.utils.midi_utils import (
-    build_three_datasets_from_chunks,
-    load_named_split_lists,
+    chunk_split,
+    load_midi_paths_from_list,
+    split_cache_dir,
 )
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
@@ -62,22 +63,38 @@ def build_dataloaders(
     tokenizer,
     train_list_path: Path,
     val_list_path: Path,
-    test_list_path: Path,
-) -> tuple[DataLoader, DataLoader, DataLoader]:
-    train_paths, val_paths, test_paths = load_named_split_lists(
-        train_list_path,
-        val_list_path,
-        test_list_path,
+) -> tuple[DataLoader, DataLoader]:
+    train_paths = load_midi_paths_from_list(train_list_path)
+    val_paths = load_midi_paths_from_list(val_list_path)
+
+    train_chunks = chunk_split(
+        train_paths,
+        tokenizer,
+        str(split_cache_dir(train_paths, int(cfg.data.block_size), "train")),
+        int(cfg.data.block_size),
+    )
+    val_chunks = chunk_split(
+        val_paths,
+        tokenizer,
+        str(split_cache_dir(val_paths, int(cfg.data.block_size), "val")),
+        int(cfg.data.block_size),
     )
 
-    train_ds, val_ds, test_ds, collator = build_three_datasets_from_chunks(
-        tokenizer=tokenizer,
-        train_src=train_paths,
-        val_src=val_paths,
-        test_src=test_paths,
-        max_seq_len=int(cfg.data.block_size),
-    )
+    from miditok.pytorch_data import DataCollator, DatasetMIDI
 
+    common = {
+        "tokenizer": tokenizer,
+        "max_seq_len": int(cfg.data.block_size),
+        "bos_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer["EOS_None"],
+    }
+    train_ds = DatasetMIDI(files_paths=train_chunks, **common)
+    val_ds = DatasetMIDI(files_paths=val_chunks, **common)
+    collator = DataCollator(
+        pad_token_id=tokenizer.pad_token_id,
+        copy_inputs_as_labels=True,
+        shift_labels=True,
+    )
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.train.per_device_train_batch_size),
@@ -95,13 +112,7 @@ def build_dataloaders(
         shuffle=False,
         collate_fn=collator,
     )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=eval_batch_size,
-        shuffle=False,
-        collate_fn=collator,
-    )
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader
 
 
 def build_model(cfg: DictConfig, device: torch.device) -> xLSTMLMModel:
@@ -243,7 +254,6 @@ def init_wandb_run(
     cfg: DictConfig,
     train_list_path: Path,
     val_list_path: Path,
-    test_list_path: Path,
     tok_cfg: str,
 ):
     if not should_log_to_wandb(cfg):
@@ -254,7 +264,6 @@ def init_wandb_run(
     run_config = OmegaConf.to_container(cfg, resolve=True)
     run_config["train_list"] = str(train_list_path)
     run_config["val_list"] = str(val_list_path)
-    run_config["test_list"] = str(test_list_path)
     run_config["tokenizer_config_path"] = tok_cfg
     return wandb.init(
         project="duet-of-models-xlstm",
@@ -329,7 +338,6 @@ def train(
     cfg: DictConfig,
     train_list_path: Path,
     val_list_path: Path,
-    test_list_path: Path,
     tok_cfg: str,
 ) -> dict[str, float]:
     seed_value = int(cfg.get("seed", 42))
@@ -339,12 +347,11 @@ def train(
     cfg = prepare_runtime_config(cfg, tokenizer_vocab_size=len(tokenizer))
     device = resolve_device(str(cfg.train.get("device", "cuda")))
 
-    train_loader, val_loader, test_loader = build_dataloaders(
+    train_loader, val_loader = build_dataloaders(
         cfg,
         tokenizer,
         train_list_path,
         val_list_path,
-        test_list_path,
     )
     model = build_model(cfg, device)
     weight_precision = str(cfg.train.get("weight_precision", "float32"))
@@ -355,7 +362,6 @@ def train(
         cfg,
         train_list_path=train_list_path,
         val_list_path=val_list_path,
-        test_list_path=test_list_path,
         tok_cfg=tok_cfg,
     )
 
@@ -551,11 +557,6 @@ def main() -> None:
         help="Path to the file containing validation MIDI paths.",
     )
     parser.add_argument(
-        "--test_list",
-        required=True,
-        help="Path to the file containing test MIDI paths.",
-    )
-    parser.add_argument(
         "--output_dir",
         required=True,
         help="Directory where checkpoints, resolved config, and metrics are written.",
@@ -568,7 +569,6 @@ def main() -> None:
         cfg,
         train_list_path=Path(args.train_list),
         val_list_path=Path(args.val_list),
-        test_list_path=Path(args.test_list),
         tok_cfg=args.tok_cfg,
     )
     print(json.dumps(metrics, indent=2, sort_keys=True))
