@@ -1,16 +1,16 @@
-embedding_dim: 128
-num_blocks: 4
+embedding_dim: 384
+num_blocks: 10
 dropout: 0.1
-slstm_at: [1]
+slstm_at: [1, 4, 7]
 mlstm_block:
   mlstm:
     conv1d_kernel_size: 4
     qkv_proj_blocksize: 4
-    num_heads: 4
+    num_heads: 8
 slstm_block:
   slstm:
     backend: cuda
-    num_heads: 4
+    num_heads: 8
     conv1d_kernel_size: 4
     bias_init: powerlaw_blockdependent
   feedforward:

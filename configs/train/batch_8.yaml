@@ -1,0 +1,17 @@
+seed: 42
+train:
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  learning_rate: 3e-4
+  max_lr: 3e-4
+  min_lr: 3e-5
+  warmup_steps: 200
+  decay_until_step: 4000
+  num_train_epochs: 3
+  eval_strategy: steps
+  eval_steps: 1000
+  save_steps: 1000
+  logging_steps: 50
+  report_to: ["wandb"]
+data:
+  block_size: 1024
