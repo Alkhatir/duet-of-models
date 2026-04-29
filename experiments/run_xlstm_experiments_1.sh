@@ -7,7 +7,7 @@ set +a
 
 TRAIN_LIST="data_reports/splits/train.txt"
 VAL_LIST="data_reports/splits/val.txt"
-TOKENIZER_CFG="data_reports/tokenizer_info/tokenizers/11.yaml"
+TOKENIZER_CFG="configs/data/11.yaml"
 
 scripts/train_xlstm.sh \
   "$TRAIN_LIST" \
