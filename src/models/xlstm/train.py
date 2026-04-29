@@ -246,7 +246,7 @@ def init_wandb_run(
     run_config["test_list"] = str(test_list_path)
     run_config["tokenizer_config_path"] = tok_cfg
     return wandb.init(
-        project=str(cfg.get("wandb_project", "duet-of-models")),
+        project="duet-of-models-xlstm",
         name=cfg.get("run_name", None),
         config=run_config,
         reinit=True,
