@@ -13,7 +13,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.data.tokenizer import MidiTokBuilder
-from src.utils.midi_utils import build_three_datasets_from_chunks, load_named_split_lists
+from src.utils.midi_utils import (
+    build_three_datasets_from_chunks,
+    load_named_split_lists,
+)
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 torch_dtype_map: dict[str, torch.dtype] = {
@@ -189,7 +192,9 @@ def compute_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     )
 
 
-def compute_batch_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
+def compute_batch_metrics(
+    logits: torch.Tensor, labels: torch.Tensor
+) -> dict[str, float]:
     valid_mask = labels != -100
     valid_count = int(valid_mask.sum().item())
     if valid_count == 0:
@@ -208,7 +213,13 @@ def compute_batch_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[st
     topk_predictions = masked_logits.topk(topk, dim=-1).indices
 
     token_accuracy = (predictions == masked_labels).float().mean().item()
-    top5_accuracy = (topk_predictions == masked_labels.unsqueeze(-1)).any(dim=-1).float().mean().item()
+    top5_accuracy = (
+        (topk_predictions == masked_labels.unsqueeze(-1))
+        .any(dim=-1)
+        .float()
+        .mean()
+        .item()
+    )
     mean_confidence = probs.gather(1, predictions.unsqueeze(-1)).mean().item()
 
     return {
@@ -276,7 +287,9 @@ def evaluate(
             total_valid_tokens += valid_tokens
             total_token_accuracy += batch_metrics["token_accuracy"] * valid_tokens
             total_top5_accuracy += batch_metrics["top5_token_accuracy"] * valid_tokens
-            total_mean_confidence += batch_metrics["mean_token_confidence"] * valid_tokens
+            total_mean_confidence += (
+                batch_metrics["mean_token_confidence"] * valid_tokens
+            )
 
     denom = max(total_valid_tokens, 1.0)
     avg_loss = total_loss / denom
@@ -430,8 +443,12 @@ def train(
                             "val_loss": val_metrics["loss"],
                             "val_perplexity": val_metrics["perplexity"],
                             "val_token_accuracy": val_metrics["token_accuracy"],
-                            "val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
-                            "val_mean_token_confidence": val_metrics["mean_token_confidence"],
+                            "val_top5_token_accuracy": val_metrics[
+                                "top5_token_accuracy"
+                            ],
+                            "val_mean_token_confidence": val_metrics[
+                                "mean_token_confidence"
+                            ],
                         },
                     )
 
@@ -473,10 +490,14 @@ def train(
         "final_val_mean_token_confidence": val_metrics["mean_token_confidence"],
         "best_val_loss": best_val_loss,
         "best_val_perplexity": (
-            best_val_metrics["perplexity"] if best_val_metrics is not None else val_metrics["perplexity"]
+            best_val_metrics["perplexity"]
+            if best_val_metrics is not None
+            else val_metrics["perplexity"]
         ),
         "best_val_token_accuracy": (
-            best_val_metrics["token_accuracy"] if best_val_metrics is not None else val_metrics["token_accuracy"]
+            best_val_metrics["token_accuracy"]
+            if best_val_metrics is not None
+            else val_metrics["token_accuracy"]
         ),
         "best_val_top5_token_accuracy": (
             best_val_metrics["top5_token_accuracy"]
