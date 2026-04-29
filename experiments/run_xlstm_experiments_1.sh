@@ -40,3 +40,13 @@ scripts/train_xlstm.sh \
   "$TOKENIZER_CFG" \
   experiments/xlstm-base-batch8-tok11 \
   configs/train/batch_8.yaml
+
+if [[ -n "${CONTAINER_ID:-}" ]] && command -v vastai >/dev/null 2>&1; then
+  if [[ -n "${CONTAINER_API_KEY:-}" ]]; then
+    vastai stop instance "$CONTAINER_ID" --api-key "$CONTAINER_API_KEY"
+  else
+    vastai stop instance "$CONTAINER_ID"
+  fi
+else
+  echo "Skipping Vast.ai shutdown: CONTAINER_ID is unset or vastai CLI is unavailable."
+fi
