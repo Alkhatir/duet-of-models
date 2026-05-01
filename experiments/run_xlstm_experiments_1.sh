@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-set -a
-source .env
-set +a
+#set -a
+#source .env
+#set +a
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 RUN_GAP_SECONDS="${RUN_GAP_SECONDS:-30}"
