@@ -221,3 +221,7 @@ LMD_CLEAN/
 /cache_chunks/
 # Cache files
 *cache.jsonl
+# Check point folders and files
+step-*/
+best/
+checkpoint.pt
