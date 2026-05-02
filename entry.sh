@@ -63,7 +63,7 @@ if [[ -d "$REPO_DIR/envs/xlstm" ]]; then
   echo "Syncing xLSTM uv environment"
   uv sync --project "$REPO_DIR/envs/xlstm"
 fi
-
+# Be carefull with this block because it can break things espacially when you set KEEP_ALIVE to 0! so keep it alive at all time and only turn the instance off via vastai CLI/Plattform
 if [[ -n "$RUN_AFTER_SETUP" ]]; then
   cd "$REPO_DIR"
   bash -lc "$RUN_AFTER_SETUP"
