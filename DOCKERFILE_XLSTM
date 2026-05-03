@@ -1,0 +1,46 @@
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_LIB=/usr/local/cuda/lib64
+ENV PATH="${CUDA_HOME}/bin:/root/.local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    curl \
+    ca-certificates \
+    unzip \
+    pkg-config \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+ && ln -sf /usr/bin/python3 /usr/bin/python \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Optional but useful for public/shared Google Drive files
+RUN uv tool install gdown
+
+# Vast.ai CLI for instance lifecycle commands from experiment scripts.
+RUN uv tool install vastai
+
+RUN nvcc --version \
+ && gcc --version \
+ && g++ --version \
+ && cmake --version \
+ && ninja --version \
+ && uv --version \
+ && vastai --help >/dev/null
+
+COPY entry.sh /entry.sh
+RUN chmod +x /entry.sh
+
+CMD ["/bin/bash"]
