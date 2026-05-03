@@ -20,13 +20,13 @@ between_runs() {
   sleep "$RUN_GAP_SECONDS"
 }
 
-#scripts/train_xlstm.sh \
-#  "$TRAIN_LIST" \
-#  "$VAL_LIST" \
-#  configs/model/xlstm/small.yaml \
-#  "$TOKENIZER_CFG" \
-#  experiments/xlstm-small-batch8-tok11 \
-#  configs/train/batch_8.yaml
+scripts/train_xlstm.sh \
+  "$TRAIN_LIST" \
+  "$VAL_LIST" \
+  configs/model/xlstm/small.yaml \
+  "$TOKENIZER_CFG" \
+  experiments/xlstm-small-batch8-tok11 \
+  configs/train/batch_8.yaml
 
 #between_runs
 
