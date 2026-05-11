@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ torch_dtype_map: dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
 }
+
+LEGACY_LR_FIELDS = {"min_lr", "max_lr", "warmup_steps", "decay_until_step"}
 
 
 def load_resolved_config(model_cfg_path: str, train_cfg_path: str) -> DictConfig:
@@ -138,7 +141,231 @@ def build_optimizer(model: xLSTMLMModel, cfg: DictConfig) -> optim.Optimizer:
     )
 
 
+def _positive_float(value: Any, field_name: str, phase_index: int) -> float:
+    try:
+        lr = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"train.lr_schedule[{phase_index}].{field_name} must be a positive number."
+        ) from exc
+    if lr <= 0:
+        raise ValueError(
+            f"train.lr_schedule[{phase_index}].{field_name} must be positive."
+        )
+    return lr
+
+
+def validate_lr_schedule(
+    schedule_cfg: Any,
+) -> list[dict[str, float | int | str | None]]:
+    schedule = OmegaConf.to_container(schedule_cfg, resolve=True)
+    if not isinstance(schedule, list) or not schedule:
+        raise ValueError("train.lr_schedule must be a non-empty list of phases.")
+
+    phases: list[dict[str, float | int | str | None]] = []
+    previous_end = 0
+    for index, phase in enumerate(schedule):
+        if not isinstance(phase, dict):
+            raise ValueError(f"train.lr_schedule[{index}] must be a mapping.")
+
+        phase_type = str(phase.get("type", "")).lower()
+        if phase_type not in {"linear", "cosine", "constant"}:
+            raise ValueError(
+                f"train.lr_schedule[{index}].type must be one of: "
+                "linear, cosine, constant."
+            )
+
+        raw_end_step = phase.get("end_step")
+        is_final = index == len(schedule) - 1
+        if raw_end_step is None:
+            end_step = None
+            if not is_final:
+                raise ValueError(
+                    f"train.lr_schedule[{index}].end_step may be null only for "
+                    "the final phase."
+                )
+            if phase_type != "constant":
+                raise ValueError(
+                    f"train.lr_schedule[{index}].end_step is required for "
+                    f"{phase_type} phases."
+                )
+        else:
+            try:
+                end_step = int(raw_end_step)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"train.lr_schedule[{index}].end_step must be an integer or null."
+                ) from exc
+            if end_step <= previous_end:
+                raise ValueError(
+                    "train.lr_schedule end_step values must be strictly increasing."
+                )
+
+        if phase_type == "constant":
+            if "lr" not in phase:
+                raise ValueError(f"train.lr_schedule[{index}].lr is required.")
+            if end_step is None and not is_final:
+                raise ValueError(
+                    f"train.lr_schedule[{index}].end_step is required for "
+                    "non-final constant phases."
+                )
+            lr = _positive_float(phase["lr"], "lr", index)
+            start_lr = lr
+            end_lr = lr
+        else:
+            if "start_lr" not in phase:
+                raise ValueError(f"train.lr_schedule[{index}].start_lr is required.")
+            if "end_lr" not in phase:
+                raise ValueError(f"train.lr_schedule[{index}].end_lr is required.")
+            start_lr = _positive_float(phase["start_lr"], "start_lr", index)
+            end_lr = _positive_float(phase["end_lr"], "end_lr", index)
+            if phase_type == "cosine" and start_lr < end_lr:
+                raise ValueError(
+                    f"train.lr_schedule[{index}] cosine phases require "
+                    "start_lr >= end_lr."
+                )
+
+        phases.append(
+            {
+                "type": phase_type,
+                "start_step": previous_end,
+                "end_step": end_step,
+                "start_lr": start_lr,
+                "end_lr": end_lr,
+            }
+        )
+        if end_step is not None:
+            previous_end = end_step
+
+    return phases
+
+
+def _has_legacy_lr_fields(cfg: DictConfig) -> bool:
+    return any(field in cfg.train for field in LEGACY_LR_FIELDS)
+
+
+def _set_scheduler_base_lr(optimizer: optim.Optimizer, lr: float) -> None:
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+        param_group["initial_lr"] = lr
+
+
+def _build_linear_scheduler(
+    optimizer: optim.Optimizer,
+    start_lr: float,
+    end_lr: float,
+    steps: int,
+) -> optim.lr_scheduler.LinearLR:
+    base_lr = max(start_lr, end_lr)
+    _set_scheduler_base_lr(optimizer, base_lr)
+    return optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=start_lr / base_lr,
+        end_factor=end_lr / base_lr,
+        total_iters=steps,
+    )
+
+
+def _build_constant_scheduler(
+    optimizer: optim.Optimizer,
+    lr: float,
+    steps: int = 1_000_000_000,
+) -> optim.lr_scheduler.ConstantLR:
+    _set_scheduler_base_lr(optimizer, lr)
+    return optim.lr_scheduler.ConstantLR(
+        optimizer,
+        factor=1.0,
+        total_iters=steps,
+    )
+
+
+def _build_explicit_scheduler(
+    optimizer: optim.Optimizer,
+    phases: list[dict[str, float | int | str | None]],
+) -> optim.lr_scheduler.LRScheduler:
+    schedulers: list[optim.lr_scheduler.LRScheduler] = []
+    milestones: list[int] = []
+    first_scheduler_base_lr: float | None = None
+
+    for index, phase in enumerate(phases):
+        phase_type = str(phase["type"])
+        start_step = int(phase["start_step"])
+        end_step = phase["end_step"]
+        start_lr = float(phase["start_lr"])
+        end_lr = float(phase["end_lr"])
+        steps = (
+            int(end_step) - start_step
+            if end_step is not None
+            else 1_000_000_000
+        )
+
+        if phase_type == "linear":
+            scheduler_base_lr = max(start_lr, end_lr)
+            scheduler = _build_linear_scheduler(optimizer, start_lr, end_lr, steps)
+        elif phase_type == "cosine":
+            scheduler_base_lr = start_lr
+            _set_scheduler_base_lr(optimizer, start_lr)
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=steps,
+                eta_min=end_lr,
+            )
+        else:
+            scheduler_base_lr = start_lr
+            scheduler = _build_constant_scheduler(optimizer, start_lr, steps)
+
+        if first_scheduler_base_lr is None:
+            first_scheduler_base_lr = scheduler_base_lr
+        schedulers.append(scheduler)
+        if end_step is not None and index < len(phases) - 1:
+            milestones.append(int(end_step))
+
+    final_phase = phases[-1]
+    final_end_step = final_phase["end_step"]
+    if final_end_step is not None and str(final_phase["type"]) != "constant":
+        milestones.append(int(final_end_step))
+        schedulers.append(
+            _build_constant_scheduler(optimizer, float(final_phase["end_lr"]))
+        )
+
+    if len(schedulers) == 1:
+        return schedulers[0]
+
+    _set_scheduler_base_lr(optimizer, float(first_scheduler_base_lr))
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=schedulers,
+        milestones=milestones,
+    )
+
+
 def build_scheduler(optimizer: optim.Optimizer, cfg: DictConfig):
+    if "lr_schedule" in cfg.train:
+        legacy_fields = sorted(
+            field for field in LEGACY_LR_FIELDS if field in cfg.train
+        )
+        if legacy_fields:
+            warnings.warn(
+                "train.lr_schedule is set, so legacy LR fields are ignored: "
+                + ", ".join(legacy_fields),
+                UserWarning,
+                stacklevel=2,
+            )
+        return _build_explicit_scheduler(
+            optimizer,
+            validate_lr_schedule(cfg.train.lr_schedule),
+        )
+
+    if not _has_legacy_lr_fields(cfg):
+        return None
+
+    warnings.warn(
+        "Legacy xLSTM LR fields are deprecated and preserve the current warmup/cosine "
+        "behavior temporarily. Migrate to train.lr_schedule for explicit LR behavior.",
+        UserWarning,
+        stacklevel=2,
+    )
+
     max_lr = float(cfg.train.get("max_lr", cfg.train.learning_rate))
     min_lr = float(cfg.train.get("min_lr", 0.0))
     warmup_steps = int(cfg.train.get("warmup_steps", 0))
