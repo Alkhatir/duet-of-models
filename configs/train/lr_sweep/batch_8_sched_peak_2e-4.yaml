@@ -1,0 +1,25 @@
+seed: 42
+train:
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  learning_rate: 2e-4
+  lr_schedule:
+    - type: linear
+      end_step: 200
+      start_lr: 2e-5
+      end_lr: 2e-4
+    - type: cosine
+      end_step: 4000
+      start_lr: 2e-4
+      end_lr: 2e-5
+    - type: constant
+      end_step: null
+      lr: 2e-5
+  num_train_epochs: 3
+  eval_strategy: steps
+  eval_steps: 1000
+  save_steps: 1000
+  logging_steps: 50
+  report_to: ["wandb"]
+data:
+  block_size: 1024
