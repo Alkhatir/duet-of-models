@@ -1,0 +1,15 @@
+{
+  "best_val_loss": 1.4951486538289218,
+  "best_val_mean_token_confidence": 0.6235408138331877,
+  "best_val_perplexity": 4.459999499574421,
+  "best_val_token_accuracy": 0.5737599265072384,
+  "best_val_top5_token_accuracy": 0.8538890689018672,
+  "final_val_loss": 1.5026724243818865,
+  "final_val_mean_token_confidence": 0.631922743764823,
+  "final_val_perplexity": 4.493682063527696,
+  "final_val_token_accuracy": 0.5763294827161094,
+  "final_val_top5_token_accuracy": 0.8536407955140539,
+  "global_step": 29145,
+  "test_evaluated": false,
+  "test_note": "Test split is not evaluated during training. Run a separate evaluation on the selected checkpoint."
+}
