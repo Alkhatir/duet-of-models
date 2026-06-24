@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tokenizer sweep followed by a batch-size sweep on the best tokenizer.
+# Tokenizer sweep with an optional explicit batch-size sweep.
 #
 # This uses the best scheduled LR config from the existing base LR sweep:
 # configs/train/lr_sweep/batch_8_sched_decay_8000.yaml
 #
 # Optional controls:
 #   PHASE=tokenizer|batch|all          Default: all
-#   TOKENIZER_SET=focused|full         Default: focused
-#   BATCH_SWEEP_TOKENIZER_CFG=...      Override tokenizer used by PHASE=batch
+#   TOKENIZER_SET=focused|full         Default: full
+#   BATCH_SWEEP_TOKENIZER_CFG=...      Required by PHASE=batch
 #   RUN_GAP_SECONDS=30                 Delay between experiments
+#
+# PHASE=all intentionally runs only the tokenizer sweep. It does not inspect
+# summary.json files or pick a best tokenizer automatically.
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
@@ -111,46 +114,17 @@ run_tokenizer_sweep() {
   done
 }
 
-best_tokenizer_from_summaries() {
-  mapfile -t tokenizers < <(select_tokenizers)
-
-  local best_cfg=""
-  local best_loss=""
-
-  for tokenizer_cfg in "${tokenizers[@]}"; do
-    local run_name="tok_$(tokenizer_name "$tokenizer_cfg")"
-    local summary_path="${TOKENIZER_OUTPUT_ROOT}/${run_name}/summary.json"
-
-    if [[ ! -f "$summary_path" ]]; then
-      echo "Missing summary for ${run_name}: ${summary_path}" >&2
-      continue
-    fi
-
-    local loss
-    loss="$(jq -r '."best/val_loss" // .best_val_loss // empty' "$summary_path")"
-    if [[ -z "$loss" ]]; then
-      echo "Could not read best validation loss from ${summary_path}" >&2
-      continue
-    fi
-
-    if [[ -z "$best_loss" ]] || awk -v loss="$loss" -v best="$best_loss" 'BEGIN { exit !(loss < best) }'; then
-      best_loss="$loss"
-      best_cfg="$tokenizer_cfg"
-    fi
-  done
-
-  if [[ -z "$best_cfg" ]]; then
-    echo "No tokenizer summary files were available to select a best tokenizer." >&2
-    exit 3
-  fi
-
-  echo "$best_cfg"
-}
-
 run_batch_sweep() {
   local tokenizer_cfg="${BATCH_SWEEP_TOKENIZER_CFG:-}"
   if [[ -z "$tokenizer_cfg" ]]; then
-    tokenizer_cfg="$(best_tokenizer_from_summaries)"
+    echo "BATCH_SWEEP_TOKENIZER_CFG is required for PHASE=batch." >&2
+    echo "Example: PHASE=batch BATCH_SWEEP_TOKENIZER_CFG=configs/data/11.yaml $0" >&2
+    exit 3
+  fi
+
+  if [[ ! -f "$tokenizer_cfg" ]]; then
+    echo "Tokenizer config not found: ${tokenizer_cfg}" >&2
+    exit 3
   fi
 
   mkdir -p "$BATCH_OUTPUT_ROOT"
@@ -188,8 +162,6 @@ batch)
   ;;
 all)
   run_tokenizer_sweep
-  between_runs
-  run_batch_sweep
   ;;
 *)
   echo "Unknown PHASE=${PHASE}. Expected tokenizer, batch, or all." >&2
