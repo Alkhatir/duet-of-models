@@ -1,6 +1,7 @@
 \documentclass{article}
 
-\usepackage[preprint]{neurips_2026}
+\PassOptionsToPackage{numbers, compress}{natbib}
+\usepackage[creativeai,final]{neurips_2026}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -10,14 +11,19 @@
 \usepackage{amsfonts}
 \usepackage{nicefrac}
 \usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
 \usepackage{xcolor}
+\usepackage[linesnumbered,ruled,vlined]{algorithm2e}
 
 \title{xLSTM-Based Symbolic Music Generation: Practical Work Report}
 
 \author{%
-  Peer Hanna \\
+  Peer (Pierre) Hanna \\
   Practical Work Report\\
-  \texttt{peerhanna501@gmail.com} \\
+  \texttt{peerhanna501@gmail.com} \\ 
+  Institute of Computational Perception \\
+  Johannes Kepler University Linz
 }
 
 \begin{document}
@@ -25,311 +31,42 @@
 \maketitle
 
 \begin{abstract}
-	This report documents the practical implementation of an xLSTM-based symbolic music generation pipeline. The current project uses MIDI files from a matched symbolic-music corpus with LastFM-derived genre tags, constructs leakage-safe train/validation/test splits, represents music with a REMI+-style MidiTok tokenizer, and trains xLSTM language models on fixed-length token chunks. The practical focus is on building a reproducible pipeline for preprocessing, tokenization, xLSTM training, hyperparameter search, model selection, evaluation, and an eventual Gradio demonstration.
+	This report documents the implementation of an xLSTM-based pipeline for symbolic music generation. The project uses MIDI files from the matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag annotations, and constructs deterministic train/validation/test splits with explicit controls against metadata and content leakage. Music is represented as discrete event sequences using a MidiTok REMI configuration with REMI+-style extensions in the active experimental tokenizer, and xLSTM language models are trained autoregressively on fixed-length token chunks. The practical contribution of the project is a reproducible workflow covering dataset construction, preprocessing, tokenization, xLSTM training, hyperparameter exploration, checkpoint selection, generation-based evaluation, and a planned Gradio demonstration interface.
 \end{abstract}
 
-\section{Introduction}
+\input{sections/introduction}
 
-Symbolic music generation treats music as a sequence of structured events rather than as raw audio. In this project, MIDI files are converted into discrete token sequences and modeled with autoregressive neural language models. The practical work focuses on an xLSTM-based pipeline for generating symbolic music continuations.
+\input{sections/project_scope_and_practical_objectives}
 
-The repository is organized around controlled experiments on xLSTM and eventually for the thesis simplified GPT-2-style Transformer models. Although a Transformer baseline exists, the practical part of this thesis currently prioritizes the xLSTM path: tokenizer selection, scalable xLSTM configurations, training runs, hyperparameter search, checkpoint selection, MIDI generation, and preparation of a user-facing demo.
+\input{sections/dataset}
 
-% TODO: Add proper citations for REMI/REMI+, MidiTok, Lakh MIDI Dataset, xLSTM, and symbolic music generation once the bibliography file is finalized. Candidate placeholders: \cite{TODO_REMI}, \cite{TODO_MIDITOK}, \cite{TODO_LAKH}, \cite{TODO_XLSTM}.
+\input{sections/preprocessing_pipeline}
 
-\section{Project Scope and Practical Objectives}
+\input{sections/remi_plus_tokenization}
 
-The practical objective is to build and document a complete symbolic-music generation pipeline centered on xLSTM. The intended deliverables are:
-\begin{itemize}
-	\item a documented dataset and split construction process;
-	\item a reproducible preprocessing and tokenization pipeline;
-	\item xLSTM model configurations forming a scaling ladder;
-	\item a training setup with checkpointing, validation metrics, and logging;
-	\item a hyperparameter search and model-selection record;
-	\item final training and evaluation results;
-	\item a Gradio demo for loading a trained model, conditioning on a prompt, and exporting generated MIDI.
-\end{itemize}
+\input{sections/xlstm_model_architecture}
 
-At the current repository state, the data split, tokenizer configuration, xLSTM training loop, learning-rate schedule variants, and generation/evaluation CLI are implemented. The final training run, final qualitative examples, and Gradio interface remain planned work.
+\input{sections/training_setup}
 
-\section{Dataset}
+\input{sections/hyperparameter_search}
 
-\subsection{Source and Structure}
+\input{sections/model_selection}
 
-The project uses a MIDI subset from LAKH MIDI Dataset stored under \verb|data/lmd_matched/| together with metadata tables and LastFM-derived tag files. The file \verb|data_reports/genre_dist.csv| contains one row per candidate MIDI file with an \verb|id| column, a \verb|midi_path| column, and binary genre/tag columns such as \verb|pop|, \verb|rock|, \verb|electronic|, \verb|jazz|, and decade labels. This file as been created with the help of LastFM tags and is used as the basis for subset sampling and train/validation/test split creation.
+\input{sections/current_and_planned_experiments}
 
-The current genre CSV contains 36,199 candidate rows excluding the header. A sampled subset of 2,000 MIDI paths is stored in \verb|data_reports/sampled_subset.txt| and split into 1,600 training files, 200 validation files, and 200 test files. The configured split ratios are 80\% train, 10\% validation, and 10\% test, with random seed 42. The test set is not used in the practical work since it is intended to be used for testing generation on different models in the thesis part.
+\input{sections/results}
 
-\begin{table}[h]
-	\centering
-	\caption{Current dataset split files in \texttt{data\_reports/splits/}.}
-	\label{tab:splits}
-	\begin{tabular}{lr}
-		\toprule
-		Split      & MIDI files \\
-		\midrule
-		Train      & 1600       \\
-		Validation & 200        \\
-		Test       & 200        \\
-		\bottomrule
-	\end{tabular}
-\end{table}
+\input{sections/gradio_demo}
 
-\subsection{Current Dataset Statistics}
+\input{sections/discussion}
 
-The split report records 27 genre columns used for sampling and reporting: \verb|00s|, \verb|60s|, \verb|70s|, \verb|80s|, \verb|90s|, \verb|acoustic|, \verb|alternative|, \verb|american|, \verb|blues|, \verb|british|, \verb|classic|, \verb|country|, \verb|electro|, \verb|electronic|, \verb|electronica|, \verb|folk|, \verb|funk|, \verb|guitar|, \verb|hardcore|, \verb|instrumental|, \verb|jazz|, \verb|metal|, \verb|piano|, \verb|pop|, \verb|punk|, \verb|rock|, and \verb|techno|. The most frequent genre labels in the selected subset by MIDI count are currently pop (1262), rock (955), 80s (611), 90s (523), classic (502), alternative (482), electronic (441), and american (407). Since tags are multi-label, these counts do not sum to 2,000.
-
-Instrument-label summaries are also computed during split creation. The most common label is drums (1708 selected MIDI rows), followed by several MIDI program labels such as \verb|prog_000|, \verb|prog_025|, \verb|prog_033|, \verb|prog_048|, and \verb|prog_035|. These labels are used as part of split balancing, not as explicit conditioning inputs to the current model.
-
-\subsection{Deduplication and Leakage Controls}
-
-The split construction code analyzes MIDI content with \verb|miditoolkit| and computes a content signature for deduplication. The current split report states that 35,979 rows were considered before within-ID deduplication, 7,897 rows were removed as duplicates, 28,082 rows remained before global deduplication, and 11,876 further rows were removed by global deduplication, leaving 16,206 rows after global deduplication. The report also records 220 parse errors.
+\input{sections/limitations}
 
-The split algorithm groups by music ID to avoid ID leakage across splits. The current report records empty train-validation, train-test, and validation-test ID overlaps. Pairwise Jensen-Shannon distances are reported for genre and instrument distributions; for example, genre-label JSD values are 0.0206 for train-validation, 0.0097 for train-test, and 0.0154 for validation-test. These values should be interpreted as diagnostics rather than final claims about dataset representativeness.
+\input{sections/future_work}
 
-\section{Preprocessing Pipeline}
+\input{sections/conclusion}
 
-The preprocessing code is intentionally lightweight. The script \verb|scripts/preprocess_data.sh| calls \verb|src.data.midi_preprocess|, which loads raw MIDI files, optionally remaps drum pitches, trims empty tracks, filters small or broken files, computes deduplication signatures, and writes cleaned MIDI files and optional manifests.
-
-The main design choice is to avoid transformations that MidiTok already handles. \verb|src/data/midi_preprocess.py| explicitly avoid velocity binning, note/time quantization, and tempo discretization during cleaning. Those choices are deferred to the tokenizer configuration, which keeps the boundary between raw MIDI sanitation and symbolic tokenization clearer.
-
-The current preprocessing defaults include:
-\begin{itemize}
-	\item coarse GM drum remapping via \verb|drum_map = gm_coarse|;
-	\item minimum note count of 50 note onsets;
-	\item minimum length of 4 estimated bars;
-	\item deduplication by a PPQ-independent note signature;
-	\item signature sensitivity to non-drum program numbers and note durations;
-	\item no PPQ rebasing by default.
-\end{itemize}
-
-For the current xLSTM experiments, the split creation path also performs MIDI parsing, drum remapping, empty-track trimming, content-signature computation, genre/instrument label accounting, and leakage-safe assignment. The exact command wrapper is:
-\begin{verbatim}
-scripts/create_dataset_splits.sh <subset_size> [genre_csv] [out_dir] [seed] [jobs]
-\end{verbatim}
-
-\section{REMI+ Tokenization}
-
-\subsection{Tokenizer Options and Motivation}
-
-The tokenizer builder supports several MidiTok tokenizers, including REMI, MIDILike, TSD, Structured, CPWord, Octuple, MuMIDI, MMM, and PerTok. The project currently uses a REMI+-style configuration, implemented as MidiTok REMI with additional event types for multitrack symbolic modeling. In the code, \verb|MidiTokBuilder.preset_remi_plus| defines REMI+ as REMI with program tokens in a single stream and time-signature tokens.
-
-REMI+ is suitable for this project because it keeps a musically interpretable event sequence while supporting multitrack MIDI information. Compared with a plain note-only representation, the selected configuration can encode pitch, duration, velocity, bar/position structure, tempo, time signature, and instrument program changes. This is important for a corpus containing full MIDI arrangements rather than only monophonic melodies.
-
-\subsection{Selected Configuration}
-
-The active tokenizer config for the current xLSTM experiments is \verb|configs/data/11.yaml|. It uses:
-\begin{itemize}
-	\item tokenizer: REMI;
-	\item beat resolution: 12 positions per beat for bars 0--4 and 6 positions per beat for bars 4--12;
-	\item 32 velocity bins;
-	\item tempo tokens enabled with 32 tempo bins and linear tempo spacing;
-	\item time-signature tokens enabled;
-	\item program tokens enabled with one token stream and program-change tokens;
-	\item drum pitch tokens enabled;
-	\item rests and chord tokens disabled.
-\end{itemize}
-
-The tokenizer selection was informed by the autotuning script \verb|src/data/autotune_miditok_remi.py|. That script sweeps REMI-style tokenizer settings and ranks them using a weighted score over sequence length proxies, round-trip note loss, structural tempo/time-signature differences, and error rate. The stored test run in \verb|data_reports/autotune_miditok_remi_test/| used 50 files from the test split. Its best configuration matches the current \verb|configs/data/11.yaml| choices: no chords, no rests, tempo and time signature tokens enabled, program tokens enabled, one program stream, program changes enabled, 32 velocities, and beat resolutions of 12 and 6.
-
-\subsection{Vocabulary and Sequence Length}
-
-The current tokenizer report for \verb|configs/data/11.yaml| records a vocabulary size of 598 and a block size of 1024 tokens. After chunking with MidiTok's training split utility, the current split produces 33,879 training chunks, 4,436 validation chunks, and 4,152 test chunks. The alternative \verb|11_chords| configuration has a vocabulary size of 612 and slightly more chunks, but chord tokens are not part of the current xLSTM run configuration.
-
-\begin{table}[h]
-	\centering
-	\caption{Tokenizer chunk statistics from \texttt{data\_reports/tokenizer\_info/11.json}.}
-	\label{tab:tokenizer}
-	\begin{tabular}{lrr}
-		\toprule
-		Split      & MIDI files & 1024-token chunks \\
-		\midrule
-		Train      & 1600       & 33879             \\
-		Validation & 200        & 4436              \\
-		Test       & 200        & 4152              \\
-		\bottomrule
-	\end{tabular}
-\end{table}
-
-\section{xLSTM Model Architecture}
-
-The xLSTM implementation provided by NXAI uses the \verb|xlstm| package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+ token IDs. The training code fills in \verb|vocab_size| from the tokenizer and \verb|context_length| from the data block size at runtime. Therefore, the model YAML files specify architectural scaling parameters rather than corpus-specific values.
-
-The repository defines a simple scaling ladder in \verb|configs/model/xlstm/|:
-\begin{itemize}
-	\item \verb|basic|: embedding dimension 128, 4 blocks, one sLSTM block;
-	\item \verb|small|: embedding dimension 192, 6 blocks, two sLSTM blocks;
-	\item \verb|base|: embedding dimension 256, 8 blocks, three sLSTM blocks;
-	\item \verb|medium|: embedding dimension 384, 10 blocks, three sLSTM blocks and 8 heads.
-\end{itemize}
-
-The common design keeps the general recipe fixed and scales mainly through embedding dimension and number of blocks. The mLSTM and sLSTM sub-blocks use a 1D convolution kernel size of 4. The small/base configurations use 4 heads; the medium configuration uses 8 heads. sLSTM feedforward layers use a projection factor of 1.3 and GELU activation. The CUDA sLSTM backend is used in the GPU-oriented configs, while a CPU-compatible basic config exists separately.
-
-\begin{table}[h]
-	\centering
-	\caption{xLSTM scaling ladder from \texttt{configs/model/xlstm/README.md}.}
-	\label{tab:xlstm_scale}
-	\begin{tabular}{lrrrr}
-		\toprule
-		Config & Embedding dim. & Blocks & sLSTM positions & Approx. params \\
-		\midrule
-		basic  & 128            & 4      & [1]             & 0.64M          \\
-		small  & 192            & 6      & [1, 4]          & 1.70M          \\
-		base   & 256            & 8      & [1, 3, 5]       & 3.77M          \\
-		medium & 384            & 10     & [1, 4, 7]       & 9.39M          \\
-		\bottomrule
-	\end{tabular}
-\end{table}
-
-The current completed experiment summaries show 1,628,384 trainable parameters for the \verb|small| run and 3,671,080 trainable parameters for the \verb|base| runs with tokenizer 11. These values differ slightly from the rounded README estimates because the actual vocabulary size and runtime configuration affect the final language-model head.
-
-\section{Training Setup}
-
-\subsection{Objective and Data Loading}
-
-Training is formulated as next-token prediction. The xLSTM trainer loads MIDI paths from explicit split-list files, tokenizes and chunks them with MidiTok, wraps the chunks in \verb|DatasetMIDI|, and uses a \verb|DataCollator| with copied inputs as labels and shifted labels. Padding labels are ignored with index \verb|-100| in the cross-entropy loss.
-
-The current block size is 1024 tokens. With tokenizer 11 and batch size 8, the training code reports 4,235 batches per epoch and 12,705 total training steps for three epochs.
-
-\subsection{Optimization, Scheduling, and Logging}
-
-The optimizer is AdamW using the xLSTM model's weight-decay parameter grouping. The base batch-8 training config uses:
-\begin{itemize}
-	\item seed 42;
-	\item per-device train and validation batch size 8;
-	\item learning rate / maximum learning rate \(3 \times 10^{-4}\);
-	\item minimum learning rate \(3 \times 10^{-5}\);
-	\item warmup for 200 steps;
-	\item cosine decay until step 4000;
-	\item 3 epochs;
-	\item evaluation, checkpointing, and saving every 1000 steps;
-	\item logging every 50 steps;
-	\item W\&B logging enabled for batch-specific configs.
-\end{itemize}
-
-The trainer supports both legacy warmup/cosine fields and explicit multi-phase learning-rate schedules. The newer LR sweep configs use schedules such as linear warmup, cosine decay, and a final constant phase. Checkpoints are written to the run directory, and the best validation-loss checkpoint is also stored under \verb|best/checkpoint.pt|.
-
-The xLSTM wrapper command is:
-\begin{verbatim}
-scripts/train_xlstm.sh <train_list> <val_list> <model_cfg> \
-  <tokenizer_cfg> <output_dir> [train_cfg]
-\end{verbatim}
-
-\section{Hyperparameter Search}
-
-The hyperparameter search currently has two levels: tokenization choices and xLSTM training choices.
-
-For tokenization, \verb|scripts/autotune_miditok_remi.sh| runs \verb|src.data.autotune_miditok_remi| over a grid of REMI options. The tested dimensions include beat resolution, rest handling, velocity bins, tempo/time-signature preservation, program-token behavior, and optional chord use. The current selected tokenizer disables rests and chords while keeping tempo, time-signature, and program information.
-
-For xLSTM training, the current repository contains small/base model-size experiments, batch-size comparisons, and a batch-8 learning-rate sweep. For the LR sweep, batch size is fixed at 8 to avoid confounding schedule comparisons with different optimizer step counts. It is also recorded that tokenizer 11 produces 33,879 training chunks, corresponding to 4,235 steps per epoch and 12,705 steps over three epochs at batch size 8.
-
-\begin{table}[h]
-	\centering
-	\caption{Current completed xLSTM validation summaries. These are intermediate experiment artifacts, not final thesis results.}
-	\label{tab:xlstm_runs}
-	\begin{tabular}{lrrrr}
-		\toprule
-		Run                              & Params & Batch & Best val. loss  & Best val. ppl.  \\
-		\midrule
-		\verb|xlstm-small-batch8-tok11|  & 1.63M  & 8     & 1.5698          & 4.8055          \\
-		\verb|xlstm-base-batch4-tok11|   & 3.67M  & 4     & \textbf{1.5611} & \textbf{4.7643} \\
-		\verb|xlstm-base-batch8-tok11|   & 3.67M  & 8     & 1.5811          & 4.8602          \\
-		\verb|batch_8_constant_1e-4|     & 3.67M  & 8     & 1.5759          & 4.8349          \\
-		\verb|batch_8_constant_3e-4|     & 3.67M  & 8     & 1.5895          & 4.9013          \\
-		\verb|batch_8_sched_peak_1e-4|   & 3.67M  & 8     & 1.8434          & 6.3179          \\
-		\verb|batch_8_sched_peak_2e-4|   & 3.67M  & 8     & 1.6398          & 5.1541          \\
-		\verb|batch_8_sched_peak_3e-4|   & 3.67M  & 8     & 1.6179          & 5.0424          \\
-		\verb|batch_8_sched_peak_5e-4|   & 3.67M  & 8     & 1.5907          & 4.9072          \\
-		\verb|batch_8_sched_warmup_100|  & 3.67M  & 8     & 1.6141          & 5.0236          \\
-		\verb|batch_8_sched_warmup_500|  & 3.67M  & 8     & 1.6007          & 4.9564          \\
-		\verb|batch_8_sched_decay_8000|  & 3.67M  & 8     & 1.5891          & 4.8995          \\
-		\verb|batch_8_sched_decay_12000| & 3.67M  & 8     & 1.5893          & 4.9002          \\
-		\bottomrule
-	\end{tabular}
-\end{table}
-
-These numbers are useful for steering the next experiments but should not yet be over-interpreted. The summaries are validation-only language-model metrics on the current 2,000-file subset. They do not yet include final held-out generation metrics, human listening observations, or qualitative MIDI analysis.
-
-\section{Model Selection}
-
-The current model-selection criterion in the trainer is validation loss: whenever validation loss improves at an evaluation step, the checkpoint is saved under the run's \verb|best| directory. This is a practical first-stage criterion because it is cheap to compute during training and aligns with the next-token objective.
-
-For final selection, validation loss should be combined with generation quality. The repository already contains a generation/evaluation CLI that can generate continuations from held-out chunks, decode prompt/reference/generated MIDI files, and compute onset precision/recall/F1, onset timing MAE, duration MAE, chroma DTW, decode success rate, and a 4-gram repetition rate over generated tokens. The final selected model should therefore be chosen using both validation loss/perplexity and test-set generation behavior.
-
-% TODO: After final runs, add a model-selection table comparing validation loss, held-out generation metrics, decode success, repetition, and subjective observations.
-
-\section{Current and Planned Experiments}
-
-Completed or partially completed artifacts in the repository include:
-\begin{itemize}
-	\item tokenizer autotuning on 50 test-split files;
-	\item fixed 2,000-file subset and leakage-safe 80/10/10 split;
-	\item xLSTM small and base runs using tokenizer 11;
-	\item base-model batch-size comparison between batch 4 and batch 8;
-	\item base-model batch-8 LR sweep over constant rates, peak rates, warmup length, and cosine decay endpoint;
-	\item an empty or incomplete \verb|xlstm-small-batch16-tok11| summary, which should be treated as unfinished until logs are recovered or rerun.
-\end{itemize}
-
-Planned work includes:
-\begin{itemize}
-	\item finish the hyperparameter search based on the current validation results;
-	\item decide whether to scale to \verb|medium| after checking whether \verb|base| is underfitting or overfitting;
-	\item run final training on the selected configuration;
-	\item run generation evaluation on the held-out test split;
-	\item collect qualitative MIDI examples and listening notes;
-	\item implement and document the Gradio demo.
-\end{itemize}
-
-\section{Results}
-
-The current repository contains intermediate validation summaries but not final thesis results. Table~\ref{tab:xlstm_runs} reports the best validation-loss and perplexity values available from existing experiment summaries. At this stage, these values should be used only to guide further experiments.
-
-% TODO: Insert final training curves here. Suggested sources: W&B exports, metrics.json time series, or generated plots from experiments/<run_name>/metrics.json.
-% TODO: Insert final held-out generation metric table from scripts/eval_generation.sh outputs.
-% TODO: Insert qualitative examples: prompt MIDI, generated MIDI, piano-roll figures, and listening observations.
-
-\section{Gradio Demo}
-
-The intended Gradio demo will provide an interactive interface for the trained xLSTM music generator. Based on the current generation code, the likely interaction flow is:
-\begin{enumerate}
-	\item the user uploads or selects a MIDI prompt;
-	\item the prompt is tokenized with the selected REMI+ tokenizer;
-	\item the xLSTM checkpoint generates a continuation autoregressively;
-	\item sampling parameters such as temperature, top-\(k\), top-\(p\), and maximum generated tokens can be adjusted;
-	\item generated token IDs are decoded back to MIDI and made available for playback/download.
-\end{enumerate}
-
-The repository does not currently contain a Gradio app. The available implementation closest to the demo is \verb|src/evaluation/generate_and_score.py|, which supports xLSTM and Transformer adapters, prompt/reference splitting, top-\(k\)/top-\(p\) sampling, MIDI decoding, per-sample outputs, and aggregate evaluation metrics. The demo can reuse this code path but should remove the batch-evaluation assumptions and expose a single-prompt user interface.
-
-% TODO: Add screenshot of final Gradio interface.
-% TODO: Add exact demo command, checkpoint path, tokenizer path, and deployment notes.
-
-\section{Discussion}
-
-The current design emphasizes reproducibility and separation of concerns. Dataset splitting is explicit and leakage-aware; preprocessing avoids irreversible musical quantization; tokenization is configured and stored in YAML; xLSTM model size is controlled through a small set of scaling parameters; training artifacts are stored under \verb|experiments/| with resolved configs and metrics.
-
-The early validation summaries suggest that schedule and batch-size choices materially affect validation loss. However, validation loss alone is not sufficient for judging musical quality. A model with slightly worse token loss may produce more coherent or less repetitive MIDI, and a model with better loss may still fail to decode reliably or may overfit common accompaniment patterns. should the final report combine token-level metrics, generated-MIDI metrics, and qualitative musical inspection?
-
-\section{Limitations}
-
-The current practical work has several limitations:
-\begin{itemize}
-	\item the active experiments use a 2,000-file subset rather than the full available corpus;
-	\item genre labels are multi-label and LastFM-derived, so they are noisy descriptive tags rather than clean class labels;
-	\item deduplication signatures reduce but may not eliminate all musical duplicates or near-duplicates;
-	\item current reported metrics are validation token metrics, not final held-out generation results;
-	\item REMI+ choices were tuned on a small sampled run and may need revisiting for final-scale training;
-	\item the Gradio demo is not yet implemented in the repository;
-	\item no human evaluation protocol is currently defined.
-\end{itemize}
-
-\section{Future Work}
-
-Immediate next steps are to finish the LR/model-size search, choose the final xLSTM configuration, run final training, and evaluate generated continuations on the test split. After that, the project should add plots of training curves, generated-MIDI metric tables, qualitative examples, and a documented Gradio demo.
-
-Further possible extensions include larger subsets or full-corpus training, conditioning on genre or instrument tags, comparing against the Transformer baseline under matched budgets, expanding tokenizer sweeps to chord-enabled settings, and adding a small human listening study.
-
-\section{Conclusion}
-
-This report initializes the practical documentation for an xLSTM-based symbolic music generation pipeline. The repository already contains the core infrastructure for dataset splitting, preprocessing, REMI+-style tokenization, xLSTM training, hyperparameter sweeps, checkpointing, and generation evaluation. The remaining thesis work is to complete the perform final model training for both xLSTM and Transformer based models, evaluate generated MIDI outputs, document the model-selection process, and do comparisons given the performance scores of the models.
+\bibliographystyle{plainnat}
+\bibliography{references}
 
 \end{document}
