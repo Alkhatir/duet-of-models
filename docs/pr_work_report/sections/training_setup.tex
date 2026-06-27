@@ -1,0 +1,32 @@
+\section{Training Setup}
+
+\subsection{Objective and Data Loading}
+
+Training is formulated as next-token prediction. The xLSTM trainer loads MIDI paths from explicit split-list files, tokenizes and chunks them with MidiTok, wraps the chunks in \verb|DatasetMIDI|, and uses a \verb|DataCollator| with copied inputs as labels and shifted labels. Padding labels are ignored with index \verb|-100| in the cross-entropy loss.
+
+The current block size is 1024 tokens. With tokenizer 11 and batch size 8, the training code reports 4,235 batches per epoch and 12,705 total training steps for three epochs.
+
+\subsection{Optimization, Scheduling, and Logging}
+
+The optimizer is AdamW using the xLSTM model's weight-decay parameter grouping. The base batch-8 training config uses:
+\begin{itemize}
+	\item seed 42;
+	\item per-device train and validation batch size 8;
+	\item learning rate / maximum learning rate \(3 \times 10^{-4}\);
+	\item minimum learning rate \(3 \times 10^{-5}\);
+	\item warmup for 200 steps;
+	\item cosine decay until step 4000;
+	\item 3 epochs;
+	\item evaluation, checkpointing, and saving every 1000 steps;
+	\item logging every 50 steps;
+	\item W\&B logging enabled for batch-specific configs.
+\end{itemize}
+
+The trainer supports both legacy warmup/cosine fields and explicit multi-phase learning-rate schedules. The newer LR sweep configs use schedules such as linear warmup, cosine decay, and a final constant phase. Checkpoints are written to the run directory, and the best validation-loss checkpoint is also stored under \verb|best/checkpoint.pt|.
+
+The xLSTM wrapper command is:
+\begin{verbatim}
+scripts/train_xlstm.sh <train_list> <val_list> <model_cfg> \
+  <tokenizer_cfg> <output_dir> [train_cfg]
+\end{verbatim}
+
