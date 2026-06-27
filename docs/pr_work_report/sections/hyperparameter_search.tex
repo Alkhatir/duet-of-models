@@ -1,0 +1,35 @@
+\section{Hyperparameter Search}
+
+The hyperparameter search currently has two levels: tokenization choices and xLSTM training choices.
+
+For tokenization, \verb|scripts/autotune_miditok_remi.sh| runs \verb|src.data.autotune_miditok_remi| over a grid of REMI options. The tested dimensions include beat resolution, rest handling, velocity bins, tempo/time-signature preservation, program-token behavior, and optional chord use. The current selected tokenizer disables rests and chords while keeping tempo, time-signature, and program information.
+
+For xLSTM training, the current repository contains small/base model-size experiments, batch-size comparisons, and a batch-8 learning-rate sweep. For the LR sweep, batch size is fixed at 8 to avoid confounding schedule comparisons with different optimizer step counts. It is also recorded that tokenizer 11 produces 33,879 training chunks, corresponding to 4,235 steps per epoch and 12,705 steps over three epochs at batch size 8.
+
+\begin{table}[h]
+	\centering
+	\caption{Current completed xLSTM validation summaries. These are intermediate experiment artifacts, not final thesis results.}
+	\label{tab:xlstm_runs}
+	\begin{tabular}{lrrrr}
+		\toprule
+		Run                              & Params & Batch & Best val. loss  & Best val. ppl.  \\
+		\midrule
+		\verb|xlstm-small-batch8-tok11|  & 1.63M  & 8     & 1.5698          & 4.8055          \\
+		\verb|xlstm-base-batch4-tok11|   & 3.67M  & 4     & \textbf{1.5611} & \textbf{4.7643} \\
+		\verb|xlstm-base-batch8-tok11|   & 3.67M  & 8     & 1.5811          & 4.8602          \\
+		\verb|batch_8_constant_1e-4|     & 3.67M  & 8     & 1.5759          & 4.8349          \\
+		\verb|batch_8_constant_3e-4|     & 3.67M  & 8     & 1.5895          & 4.9013          \\
+		\verb|batch_8_sched_peak_1e-4|   & 3.67M  & 8     & 1.8434          & 6.3179          \\
+		\verb|batch_8_sched_peak_2e-4|   & 3.67M  & 8     & 1.6398          & 5.1541          \\
+		\verb|batch_8_sched_peak_3e-4|   & 3.67M  & 8     & 1.6179          & 5.0424          \\
+		\verb|batch_8_sched_peak_5e-4|   & 3.67M  & 8     & 1.5907          & 4.9072          \\
+		\verb|batch_8_sched_warmup_100|  & 3.67M  & 8     & 1.6141          & 5.0236          \\
+		\verb|batch_8_sched_warmup_500|  & 3.67M  & 8     & 1.6007          & 4.9564          \\
+		\verb|batch_8_sched_decay_8000|  & 3.67M  & 8     & 1.5891          & 4.8995          \\
+		\verb|batch_8_sched_decay_12000| & 3.67M  & 8     & 1.5893          & 4.9002          \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+These numbers are useful for steering the next experiments but should not yet be over-interpreted. The summaries are validation-only language-model metrics on the current 2,000-file subset. They do not yet include final held-out generation metrics, human listening observations, or qualitative MIDI analysis.
+
