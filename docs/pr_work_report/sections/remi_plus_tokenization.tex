@@ -1,0 +1,72 @@
+\section{REMI+ Tokenization}
+
+\subsection{Tokenizer Options and Motivation}
+
+The tokenizer builder supports several MidiTok tokenizers, including REMI \cite{huangPopMusicTransformer2020}, MIDILike \cite{ooreThisTimeFeeling2020a}, TSD \cite{fradetBytePairEncoding2023}, Structured \cite{hadjeresPianoInpaintingApplication2021}, CPWord \cite{hsiaoCompoundWordTransformer2021}, Octuple \cite{zengMusicBERTSymbolicMusic2021}, MuMIDI \cite{renPopMAGPopMusic2020}, MMM \cite{ensMMMExploringConditional2020}, and PerTok \footnote{Performance Tokenizer, created by Lemonaide \url{https://www.lemonaide.ai/}}. The project currently uses a REMI+-style configuration, implemented as MidiTok REMI with additional event types for multitrack symbolic modeling. In the code, \verb|MidiTokBuilder.preset_remi_plus| defines REMI+ as REMI with program tokens in a single stream and time-signature tokens.
+
+REMI+ is suitable for this project because it keeps a musically interpretable event sequence while supporting multitrack MIDI information. Compared with a plain note-only representation, the selected configuration can encode pitch, duration, velocity, bar/position structure, tempo, time signature, and instrument program changes. This is important for a corpus containing full MIDI arrangements rather than only monophonic melodies.
+
+\subsection{Selected Configuration}
+
+The tokenizer selection in this project is produced by an explicit grid search rather than by manually choosing one REMI configuration. The implemented search is \verb|src/data/autotune_miditok_remi.py|, and the stored run is in \verb|data_reports/autotune_miditok_remi_test|. It evaluates each tokenizer on 50 MIDI files sampled from the test split, writes every generated configuration under \verb|tokenization_configs/|, ranks the results in \verb|results_ranked.csv|, and exports the winning configuration as \verb|best_tokenizer.yaml|.
+
+The grid is deliberately compact. It keeps the REMI+ event families needed for this corpus fixed: tempo tokens are enabled with 32 linear tempo bins, time-signature tokens are enabled, program tokens are enabled in one token stream, drum pitch tokens are enabled, and chord tokens are disabled. The searched dimensions are:
+\begin{itemize}
+	\item beat resolution: \(8/4\) or \(12/6\), meaning the first value is used for beat ranges 0--4 and the second for beat ranges 4--12;
+	\item velocity vocabulary size: 16 or 32 velocity bins;
+	\item rest tokens: disabled or enabled, with matching rest resolutions;
+	\item program-change tokens: disabled or enabled.
+\end{itemize}
+
+For each grid point, the script constructs a MidiTok REMI tokenizer, tokenizes the sampled files, decodes the tokens back to MIDI, and computes both sequence-length and round-trip fidelity metrics. The final score is a weighted sum of normalized components. Lower is better. The components include token density, the 95th percentile sequence length, note-loss rate, tempo and time-signature count differences, tokenization error rate, chroma distance, precision, recall, F1, onset error, and duration error. Let \(z(\cdot)\) denote the z-score of a metric across all tokenizer candidates. With the default weights used in the stored run, the score is:
+\[
+	\begin{array}{rl}
+		\mathrm{score} = & 1.0z(\mathrm{tokens/sec}) + 0.5z(\mathrm{p95\ tokens/file}) + 2.0z(\mathrm{note\ loss})             \\
+		                 & + 1.0z(\mathrm{tempo\ diff} + \mathrm{time\ signature\ diff}) + 1.0z(\mathrm{error\ rate})          \\
+		                 & + 3.0z(\mathrm{chroma\ DTW}) - 0.5z(\mathrm{precision}) - 0.5z(\mathrm{recall}) - 0.5z(\mathrm{F1}) \\
+		                 & + 0.5z(\mathrm{onset\ MAE}) + 0.5z(\mathrm{duration\ MAE}) .
+	\end{array}
+\]
+Metrics where lower is better enter with a positive sign, while precision, recall, and F1 enter with a negative sign because higher values are better. This is why the best tokenizer has the lowest, not the highest, score.
+
+The chroma-distance component is computed after the tokenizer round trip, so it compares the original MIDI file with the decoded MIDI file. The helper first converts each MIDI into a chromagram with \verb|pretty_midi| \cite{raffelINTUITIVEANALYSISCREATION}. Each frame is a 12-dimensional pitch-class vector, where octave information is collapsed and simultaneous notes are accumulated across instruments. Drum tracks are included in this autotuning run. The summed chroma frames are L2-normalized, which makes the comparison focus more on pitch-class distribution than on raw loudness or number of active notes. The two chroma sequences are then compared with dynamic time warping (DTW) \cite{giorginoComputingVisualizingDynamic2009}, using Euclidean distance between aligned chroma frames as the local cost. DTW is useful here because small timing differences introduced by tokenization and decoding should not immediately count as complete harmonic mismatches. In the current helper implementation, the normal non-empty-MIDI branch computes the best DTW cost over all 12 pitch-class rotations, so the stored \verb|chroma_dtw_score| is effectively transpose-invariant. Lower values mean that the reconstructed MIDI has a more similar pitch-class trajectory to the original.
+
+\begin{table}[h]
+	\centering
+	\scriptsize
+	\begin{tabular}{rcccccrrr}
+		\toprule
+		Rank & Config               & Beat res. & Vel. & Rests & Prog. changes & Median tokens & P95 tokens & Score           \\
+		\midrule
+		1    & \texttt{\textbf{11}} & 12/6      & 32   & no    & yes           & 16733         & 44691      & \textbf{-6.196} \\
+		2    & \verb|15|            & 12/6      & 32   & yes   & yes           & 16752         & 44702      & -6.129          \\
+		3    & \verb|10|            & 12/6      & 32   & no    & no            & 19004         & 51553      & -3.200          \\
+		4    & \verb|14|            & 12/6      & 32   & yes   & no            & 19024         & 51564      & -3.132          \\
+		5    & \verb|3|             & 8/4       & 32   & no    & yes           & 16733         & 44574      & -1.863          \\
+		6    & \verb|7|             & 8/4       & 32   & yes   & yes           & 16752         & 44585      & -1.803          \\
+		7    & \verb|9|             & 12/6      & 16   & no    & yes           & 16733         & 44691      & -1.147          \\
+		8    & \verb|13|            & 12/6      & 16   & yes   & yes           & 16752         & 44702      & -1.080          \\
+		9    & \verb|2|             & 8/4       & 32   & no    & no            & 19004         & 51448      & 1.138           \\
+		10   & \verb|6|             & 8/4       & 32   & yes   & no            & 19024         & 51459      & 1.198           \\
+		11   & \verb|8|             & 12/6      & 16   & no    & no            & 19004         & 51553      & 1.850           \\
+		12   & \verb|12|            & 12/6      & 16   & yes   & no            & 19024         & 51564      & 1.917           \\
+		13   & \verb|1|             & 8/4       & 16   & no    & yes           & 16733         & 44574      & 3.082           \\
+		14   & \verb|5|             & 8/4       & 16   & yes   & yes           & 16752         & 44585      & 3.141           \\
+		15   & \verb|0|             & 8/4       & 16   & no    & no            & 19004         & 51448      & 6.083           \\
+		16   & \verb|4|             & 8/4       & 16   & yes   & no            & 19024         & 51459      & 6.142           \\
+		\bottomrule
+	\end{tabular}
+	\caption{Tokenizer grid-search ranking. Lower score is better.}
+	\label{tab:tokenizer-autotune}
+
+\end{table}
+
+Configuration 11 has the lowest overall score in the ranked grid. It uses REMI with beat resolutions \(12/6\), 32 velocity bins, no chord tokens, no rest tokens, tempo and time-signature tokens enabled, program tokens enabled in one stream, program-change tokens enabled, and drum pitch tokens enabled. It keeps the strongest tested velocity and timing resolution, gives one of the shortest median token sequences, keeps the tokenization error rate at zero in this run, and preserves the structural MIDI information represented by tempo, time-signature, program, and drum-pitch events.
+
+\subsection{Vocabulary and Sequence Length}
+
+The grid search also gives insight into how vocabulary choices affect sequence length. The vocabulary-related options in this run are velocity resolution, rest events, and program-change events. Moving from 16 to 32 velocity bins increases the pitch-performance detail available to the representation, while enabling rests or program changes adds event types that change how time and instrumentation are represented in the sequence.
+
+The sequence-length columns in Table~\ref{tab:tokenizer-autotune} are measured directly from the tokenized MIDI files. They show that program-change tokens are the strongest sequence-length factor in this grid: configurations with program changes enabled have median lengths around 16.7k tokens per file, whereas comparable configurations without program changes have median lengths around 19.0k tokens per file. Rest tokens have a much smaller effect in this run, increasing the median by only about 20 tokens per file when the other settings are fixed. The higher beat resolution \(12/6\) does not increase the measured median length compared with \(8/4\), but it improves the final score because the round-trip metrics are better. Similarly, 32 velocity bins rank better than 16 bins, indicating that the added vocabulary detail is beneficial for preserving the MIDI content under the scoring criteria.
+
+The four strongest candidates are therefore configurations 11, 15, 10, and 14. They all use the higher \(12/6\) beat resolution and 32 velocity bins, but they differ in the two event families that most directly change sequence layout: rests and program-change tokens. Configurations 11 and 10 disable rests, while 15 and 14 enable them; configurations 11 and 15 keep program-change tokens, while 10 and 14 omit them. This shortlist gives a useful tokenizer-only view of the design space: one pair is more compact because it uses program changes, and the other pair keeps longer explicit event streams without them. The grid search selects configuration 11, but the remaining close candidates are musically plausible alternatives. In the next step, these tokenizers can be treated as experimental conditions, including chord-enabled variants, to test whether the tokenizer score also predicts how well the downstream model learns from each representation.
