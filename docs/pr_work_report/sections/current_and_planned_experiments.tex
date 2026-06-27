@@ -1,0 +1,22 @@
+\section{Current and Planned Experiments}
+
+Completed or partially completed artifacts in the repository include:
+\begin{itemize}
+	\item tokenizer autotuning on 50 test-split files;
+	\item fixed 2,000-file subset and leakage-safe 80/10/10 split;
+	\item xLSTM small and base runs using tokenizer 11;
+	\item base-model batch-size comparison between batch 4 and batch 8;
+	\item base-model batch-8 LR sweep over constant rates, peak rates, warmup length, and cosine decay endpoint;
+	\item an empty or incomplete \verb|xlstm-small-batch16-tok11| summary, which should be treated as unfinished until logs are recovered or rerun.
+\end{itemize}
+
+Planned work includes:
+\begin{itemize}
+	\item finish the hyperparameter search based on the current validation results;
+	\item decide whether to scale to \verb|medium| after checking whether \verb|base| is underfitting or overfitting;
+	\item run final training on the selected configuration;
+	\item run generation evaluation on the held-out test split;
+	\item collect qualitative MIDI examples and listening notes;
+	\item implement and document the Gradio demo.
+\end{itemize}
+
