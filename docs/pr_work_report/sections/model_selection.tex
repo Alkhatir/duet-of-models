@@ -1,0 +1,8 @@
+\section{Model Selection}
+
+The current model-selection criterion in the trainer is validation loss: whenever validation loss improves at an evaluation step, the checkpoint is saved under the run's \verb|best| directory. This is a practical first-stage criterion because it is cheap to compute during training and aligns with the next-token objective.
+
+For final selection, validation loss should be combined with generation quality. The repository already contains a generation/evaluation CLI that can generate continuations from held-out chunks, decode prompt/reference/generated MIDI files, and compute onset precision/recall/F1, onset timing MAE, duration MAE, chroma DTW, decode success rate, and a 4-gram repetition rate over generated tokens. The final selected model should therefore be chosen using both validation loss/perplexity and test-set generation behavior.
+
+% TODO: After final runs, add a model-selection table comparing validation loss, held-out generation metrics, decode success, repetition, and subjective observations.
+
