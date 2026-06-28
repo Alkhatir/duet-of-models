@@ -9,7 +9,6 @@ from pathlib import Path
 from random import Random
 from typing import Any
 
-import pretty_midi
 import torch
 from dacite import from_dict
 from miditok import TokSequence
@@ -19,7 +18,6 @@ from transformers import AutoModelForCausalLM
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 from src.data.tokenizer import MidiTokBuilder
-from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
 from src.utils.midi_utils import chunk_split, load_midi_paths_from_list
 
 
@@ -347,6 +345,10 @@ def evaluate_sample(
     out_dir: Path,
     metrics_cfg: DictConfig,
 ) -> dict[str, Any]:
+    import pretty_midi
+
+    from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
+
     sample_dir = out_dir / "samples" / f"{sample.sample_id:04d}"
     prompt_path = sample_dir / "prompt.mid"
     reference_path = sample_dir / "reference.mid"
