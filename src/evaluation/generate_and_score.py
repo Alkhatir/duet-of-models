@@ -88,11 +88,25 @@ class XLSTMAdapter(BaseModelAdapter):
             else:
                 model_cfg = raw_cfg
         model_cfg = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
+        converted_slstm_backend = False
+        if device.type == "cpu" and "slstm_block" in model_cfg:
+            slstm_cfg = model_cfg.slstm_block.get("slstm", None)
+            if slstm_cfg is not None and "backend" in slstm_cfg:
+                converted_slstm_backend = str(slstm_cfg.backend) != "vanilla"
+                slstm_cfg.backend = "vanilla"
         model_cfg.vocab_size = tokenizer_vocab_size
         model = xLSTMLMModel(
             from_dict(xLSTMLMModelConfig, OmegaConf.to_container(model_cfg, resolve=True))
         ).to(device)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        if converted_slstm_backend:
+            state_dict = {
+                key: value.transpose(1, 2).contiguous()
+                if key.endswith("._recurrent_kernel_") and value.ndim == 3
+                else value
+                for key, value in state_dict.items()
+            }
+        model.load_state_dict(state_dict)
         model.eval()
         self.model = model
         self._max_context_length = int(model_cfg.context_length)
@@ -255,7 +269,8 @@ def compute_prompt_length(token_ids: list[int], cfg: DictConfig) -> int:
 
 
 def decode_ids_to_midi(tokenizer, token_ids: list[int], output_path: Path) -> None:
-    score = tokenizer.decode(TokSequence(ids=token_ids), output_path=output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    score = tokenizer.decode(TokSequence(ids=token_ids))
     if not output_path.exists():
         score.dump_midi(output_path)
 
