@@ -11,6 +11,7 @@ dependencies = [
   "dacite>=1.8.1",
   "tqdm>=4.66",
   "wandb>=0.25.1",
+  "gradio>=4.44",
   "miditok>=3.0.0",
   "miditoolkit>=0.1.16",
   "PyYAML>=6.0",
