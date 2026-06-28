@@ -4,8 +4,15 @@
 
 The tokenizer builder supports several MidiTok tokenizers, including REMI \cite{huangPopMusicTransformer2020}, MIDILike \cite{ooreThisTimeFeeling2020a}, TSD \cite{fradetBytePairEncoding2023}, Structured \cite{hadjeresPianoInpaintingApplication2021}, CPWord \cite{hsiaoCompoundWordTransformer2021}, Octuple \cite{zengMusicBERTSymbolicMusic2021}, MuMIDI \cite{renPopMAGPopMusic2020}, MMM \cite{ensMMMExploringConditional2020}, and PerTok \footnote{Performance Tokenizer, created by Lemonaide \url{https://www.lemonaide.ai/}}. The project currently uses a REMI+-style configuration, implemented as MidiTok REMI with additional event types for multitrack symbolic modeling. In the code, \verb|MidiTokBuilder.preset_remi_plus| defines REMI+ as REMI with program tokens in a single stream and time-signature tokens.
 
-REMI+ is suitable for this project because it keeps a musically interpretable event sequence while supporting multitrack MIDI information. Compared with a plain note-only representation, the selected configuration can encode pitch, duration, velocity, bar/position structure, tempo, time signature, and instrument program changes. This is important for a corpus containing full MIDI arrangements rather than only monophonic melodies.
+REMI+ is suitable for this project because it keeps a musically interpretable event sequence while supporting multitrack MIDI information. Compared with a plain note-only representation, the selected configuration can encode pitch, duration, velocity, bar/position structure, tempo, time signature, and instrument program changes, see Figure~\ref{fig:REMI_plus}. This is important for a corpus containing full MIDI arrangements rather than only monophonic melodies.
 
+\begin{figure}
+	\centering
+	\includegraphics[width=0.95\textwidth]{figures/REMI_plus_seq.png}
+	\caption{Example of REMI+ tokenization for a symbolic music sequence. Compared with standard REMI, REMI+ preserves the bar--position structure while adding a time-signature token and program tokens before pitch events, allowing the sequence to represent multi-track and multi-instrument music in a single token stream. This diagram is inspired by \texttt{MidiTok}.\protect\footnotemark.}
+	\label{fig:REMI_plus}
+\end{figure}
+\footnotetext{\url{https://miditok.readthedocs.io/en/latest/tokenizations.html}}
 \subsection{Selected Configuration}
 
 The tokenizer selection in this project is produced by an explicit grid search rather than by manually choosing one REMI configuration. The implemented search is \verb|src/data/autotune_miditok_remi.py|, and the stored run is in \verb|data_reports/autotune_miditok_remi_test|. It evaluates each tokenizer on 50 MIDI files sampled from the test split, writes every generated configuration under \verb|tokenization_configs/|, ranks the results in \verb|results_ranked.csv|, and exports the winning configuration as \verb|best_tokenizer.yaml|.
