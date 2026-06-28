@@ -1,6 +1,6 @@
 \section{xLSTM Model Architecture}
 
-The xLSTM implementation provided by NXAI uses the \verb|xlstm| package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+ token IDs. The training code fills in \verb|vocab_size| from the tokenizer and \verb|context_length| from the data block size at runtime. Therefore, the model YAML files specify architectural scaling parameters rather than corpus-specific values.
+xLSTM extends the LSTM family with exponential gating and modified scalar and matrix memory structures designed for scalable language modeling \citep{beckXLSTMExtendedLong2024}. The implementation provided by NXAI \footnote{\url{https://github.com/nx-ai/xlstm}} uses the \verb|xlstm| package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+ token IDs. The training code fills in \verb|vocab_size| from the tokenizer and \verb|context_length| from the data block size at runtime. Therefore, the model YAML files specify architectural scaling parameters rather than corpus-specific values.
 
 The repository defines a simple scaling ladder in \verb|configs/model/xlstm/|:
 \begin{itemize}
@@ -14,8 +14,6 @@ The common design keeps the general recipe fixed and scales mainly through embed
 
 \begin{table}[h]
 	\centering
-	\caption{xLSTM scaling ladder from \texttt{configs/model/xlstm/README.md}.}
-	\label{tab:xlstm_scale}
 	\begin{tabular}{lrrrr}
 		\toprule
 		Config & Embedding dim. & Blocks & sLSTM positions & Approx. params \\
@@ -26,7 +24,9 @@ The common design keeps the general recipe fixed and scales mainly through embed
 		medium & 384            & 10     & [1, 4, 7]       & 9.39M          \\
 		\bottomrule
 	\end{tabular}
+	\caption{xLSTM scaling ladder from \texttt{configs/model/xlstm/README.md}.}
+	\label{tab:xlstm_scale}
+
 \end{table}
 
 The current completed experiment summaries show 1,628,384 trainable parameters for the \verb|small| run and 3,671,080 trainable parameters for the \verb|base| runs with tokenizer 11. These values differ slightly from the rounded README estimates because the actual vocabulary size and runtime configuration affect the final language-model head.
-
