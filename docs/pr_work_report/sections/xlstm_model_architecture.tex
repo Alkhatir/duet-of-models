@@ -21,7 +21,7 @@ The common design keeps the general recipe fixed and scales mainly through embed
 		basic  & 128            & 4      & [1]             & 0.64M          \\
 		small  & 192            & 6      & [1, 4]          & 1.70M          \\
 		base   & 256            & 8      & [1, 3, 5]       & 3.77M          \\
-		medium & 384            & 10     & [1, 4, 7]       & 9.39M          \\
+		medium & 384            & 10     & [1, 4, 7]       & 9.28M          \\
 		\bottomrule
 	\end{tabular}
 	\caption{xLSTM scaling ladder from \texttt{configs/model/xlstm/README.md}.}
@@ -29,4 +29,4 @@ The common design keeps the general recipe fixed and scales mainly through embed
 
 \end{table}
 
-The current completed experiment summaries show 1,628,384 trainable parameters for the \verb|small| run and 3,671,080 trainable parameters for the \verb|base| runs with tokenizer 11. These values differ slightly from the rounded README estimates because the actual vocabulary size and runtime configuration affect the final language-model head.
+The current completed experiment summaries show 1,628,384 trainable parameters for the \verb|small| run, 3,671,080 trainable parameters for the \verb|base| runs with tokenizer 11 and 9,278,320 trainable parameters for the \verb|medium| run with tokenizer 14.  These values differ slightly from the rounded README estimates because the tokenizer vocabulary size is filled in at runtime and determines the sizes of the token embedding and final language-model head.
