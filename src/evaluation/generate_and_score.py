@@ -208,6 +208,17 @@ def select_eval_samples(
 
 def sample_next_token(logits: torch.Tensor, cfg: DictConfig) -> int:
     sampling_cfg = cfg.sampling
+    forbidden_token_ids = sampling_cfg.get("forbidden_token_ids", [])
+    if forbidden_token_ids:
+        logits = logits.clone()
+        valid_forbidden_ids = [
+            int(token_id)
+            for token_id in forbidden_token_ids
+            if 0 <= int(token_id) < logits.size(-1)
+        ]
+        if valid_forbidden_ids:
+            logits[valid_forbidden_ids] = float("-inf")
+
     if bool(sampling_cfg.get("greedy", False)):
         return int(torch.argmax(logits, dim=-1).item())
 
@@ -247,6 +258,7 @@ def generate_continuation(
 ) -> list[int]:
     generated = prompt_ids.copy()
     continuation: list[int] = []
+    min_new_tokens = int(cfg.sampling.get("min_new_tokens", 0))
     for _ in range(max_new_tokens):
         window = generated[-adapter.max_context_length :]
         input_ids = torch.tensor(window, dtype=torch.long, device=adapter.device).unsqueeze(0)
@@ -254,7 +266,11 @@ def generate_continuation(
         next_token = sample_next_token(logits[0], cfg)
         generated.append(next_token)
         continuation.append(next_token)
-        if eos_token_id is not None and next_token == eos_token_id:
+        if (
+            eos_token_id is not None
+            and next_token == eos_token_id
+            and len(continuation) >= min_new_tokens
+        ):
             break
     return continuation
 
