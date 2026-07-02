@@ -1,0 +1,41 @@
+\section{Model Selection}
+
+Model selection is handled in two stages. During training, the trainer selects checkpoints by validation loss. Whenever an evaluation step improves the run's validation loss, the checkpoint is copied to the run-local \verb|best/checkpoint.pt| path. This gives every run a reproducible first-stage checkpoint tied to the same next-token objective used for optimization.
+
+Across runs, the first-stage comparison uses the exported \verb|summary.json| files and W\&B histories rather than the final checkpoint alone. This distinction matters because several runs overfit or degrade after their best validation step. The clearest example is the 15-epoch medium tokenizer-14 run: its best validation loss is 1.5173 at step 9000, but the final validation loss is 1.8799 after 72,870 steps. The selected checkpoint for that run is therefore the early best checkpoint, not the final training state.
+
+\begin{table}[h]
+	\centering
+	\scriptsize
+	\begin{tabular}{lrrrrr}
+		\toprule
+		Run                                                 & Params & Tok. & Batch & Best val. loss  \\
+		\midrule
+		\texttt{tok\_14\_batch\_16}                         & 3.70M  & 14   & 16    & \textbf{1.4456} \\
+		\texttt{tok\_14} / \texttt{tok\_14\_batch\_8}       & 3.70M  & 14   & 8     & 1.4471          \\
+		\texttt{tok\_10\_batch\_4}                          & 3.67M  & 10   & 4     & 1.4575          \\
+		\texttt{tok\_10} / \texttt{tok\_10\_batch\_8}       & 3.67M  & 10   & 8     & 1.4619          \\
+		\texttt{tok\_10\_batch\_16}                         & 3.67M  & 10   & 16    & 1.4663          \\
+		\texttt{tok\_10\_chords}                            & 3.68M  & 10   & 8     & 1.4690          \\
+		\texttt{tok\_14\_chords}                            & 3.70M  & 14   & 8     & 1.4823          \\
+		\texttt{xlstm-medium-batch8-tok14-15epoch-restarts} & 9.28M  & 14   & 8     & 1.5173          \\
+		\bottomrule
+	\end{tabular}
+	\caption{Current first-stage model candidates ranked by best validation loss. The ranking uses validation summaries only and should be revisited after held-out generation evaluation.}
+	\label{tab:model-selection-candidates}
+\end{table}
+
+The current first-stage candidate is the base xLSTM with tokenizer 14. The best scalar validation loss is the batch-16 run, but the batch-8 tokenizer-14 run is effectively tied and is the safer practical default for subsequent experiments because it leaves more memory headroom for larger models and generation-time diagnostics. The tokenizer-10 runs are close enough to remain useful baselines, while tokenizer 11 is no longer the preferred downstream representation despite being the tokenizer-only autotune winner.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.90\textwidth]{figures/xlstm_medium_overfit_curve.png}
+	\caption{Training and validation loss for the medium tokenizer-14 run. The widening gap after step 9000 shows why final-checkpoint selection would be misleading for this experiment.}
+	\label{fig:xlstm-medium-overfit}
+\end{figure}
+
+The medium run is therefore useful as a negative selection example. It was derived from sensible sweep conclusions--tokenizer 14, batch size 8, and a larger model--but its W\&B trajectory indicates that more capacity and longer training did not translate into a better validation checkpoint under the chosen schedule. The correct action is not to select the final medium checkpoint, nor to treat the medium architecture as ruled out. The correct action is to keep the early best checkpoint as an evaluated candidate and require a follow-up medium sweep before claiming that the larger model improves generation quality.
+
+Validation loss is still only a proxy for musical quality. It measures the probability assigned to the next reference token, not whether sampled continuations decode cleanly, avoid excessive repetition, preserve plausible timing, or sound coherent. For final selection, the validation-ranked checkpoints should therefore be evaluated with the generation pipeline already described in the training setup. The repository's evaluation CLI can generate continuations from held-out prompts, decode generated and reference MIDI files, and compute onset precision/recall/F1, onset timing error, duration error, chroma DTW, decode success rate, and token-level repetition statistics.
+
+The final model choice should use a two-gate rule. A checkpoint first has to be competitive on validation loss and perplexity, because a model with poor next-token behavior is unlikely to be a strong generator. Among the validation-competitive checkpoints, the selected model should then be the one with the best held-out generation behavior: high decode success, low repetition, low chroma distance, reasonable onset and duration errors, and acceptable qualitative MIDI inspection. Under that rule, the present validation ranking identifies the checkpoints that should be evaluated next, but it does not yet close model selection.

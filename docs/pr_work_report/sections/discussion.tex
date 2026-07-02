@@ -1,0 +1,6 @@
+\section{Discussion}
+
+The current design emphasizes reproducibility and separation of concerns. Dataset splitting is explicit and leakage-aware; preprocessing avoids irreversible musical quantization; tokenization is configured and stored in YAML; xLSTM model size is controlled through a small set of scaling parameters; training artifacts are stored under \verb|experiments/| with resolved configs and metrics.
+
+The early validation summaries suggest that schedule and batch-size choices materially affect validation loss. However, validation loss alone is not sufficient for judging musical quality. A model with slightly worse token loss may produce more coherent or less repetitive MIDI, and a model with better loss may still fail to decode reliably or may overfit common accompaniment patterns. should the final report combine token-level metrics, generated-MIDI metrics, and qualitative musical inspection?
+

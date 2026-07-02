@@ -1,0 +1,16 @@
+\section{Gradio Demo}
+
+The intended Gradio demo will provide an interactive interface for the trained xLSTM music generator. Based on the current generation code, the likely interaction flow is:
+\begin{enumerate}
+	\item the user uploads or selects a MIDI prompt;
+	\item the prompt is tokenized with the selected REMI+ tokenizer;
+	\item the xLSTM checkpoint generates a continuation autoregressively;
+	\item sampling parameters such as temperature, top-\(k\), top-\(p\), and maximum generated tokens can be adjusted;
+	\item generated token IDs are decoded back to MIDI and made available for playback/download.
+\end{enumerate}
+
+The repository does not currently contain a Gradio app. The available implementation closest to the demo is \verb|src/evaluation/generate_and_score.py|, which supports xLSTM and Transformer adapters, prompt/reference splitting, top-\(k\)/top-\(p\) sampling, MIDI decoding, per-sample outputs, and aggregate evaluation metrics. The demo can reuse this code path but should remove the batch-evaluation assumptions and expose a single-prompt user interface.
+
+% TODO: Add screenshot of final Gradio interface.
+% TODO: Add exact demo command, checkpoint path, tokenizer path, and deployment notes.
+

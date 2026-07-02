@@ -225,3 +225,4 @@ LMD_CLEAN/
 step-*/
 best/
 checkpoint.pt
+/docs/pr_work_report/figures/wandb_exports

@@ -1,0 +1,15 @@
+\section{Project Scope and Practical Objectives}
+
+The practical objective is to build and document a complete symbolic-music generation pipeline centered on xLSTM. The intended deliverables are:
+\begin{itemize}
+	\item a documented dataset construction and split-generation procedure;
+	\item a reproducible preprocessing and tokenization pipeline;
+	\item xLSTM model configurations forming a controlled scaling ladder;
+	\item a training setup with checkpointing, validation metrics, and experiment logging;
+	\item a hyperparameter-search and model-selection record;
+	\item final quantitative and qualitative evaluation results;
+	\item a Gradio demo for loading a trained model, conditioning generation on a prompt, and exporting generated MIDI files.
+\end{itemize}
+
+At the current repository state, the dataset split construction, tokenizer configurations, xLSTM training loop, learning-rate schedule variants, experiment scripts, checkpointing, and generation/evaluation command-line interface are implemented. Several exploratory and sweep runs are already present in the repository. The remaining work is to identify the final thesis model checkpoint, complete the final qualitative and quantitative evaluation, and implement the Gradio demonstration interface.
+

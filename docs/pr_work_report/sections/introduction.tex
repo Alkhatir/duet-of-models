@@ -1,0 +1,6 @@
+\section{Introduction}
+
+Symbolic music generation represents music as structured symbolic events, such as note onsets, durations, velocities, programs, and timing information, rather than as raw audio waveforms. In this project, MIDI files are converted into discrete token sequences and modeled with autoregressive neural language models. The practical focus is the development of an xLSTM-based system for generating symbolic music continuations from a given prompt.
+
+The repository\footnote{\url{https://github.com/Alkhatir/duet-of-models}} is organized for controlled experiments on symbolic music generation using xLSTM models and, for later thesis comparison, simplified GPT-2-style Transformer baselines. Although the repository includes infrastructure for both model families, the current practical phase prioritizes the xLSTM path: tokenizer selection, scalable xLSTM configurations, training runs, hyperparameter sweeps, checkpoint selection, and MIDI generation.
+

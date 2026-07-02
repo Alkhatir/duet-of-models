@@ -31,6 +31,6 @@ Approximate parameter counts with this repo's current tokenizer setup are:
 - `basic`: ~0.64M
 - `small`: ~1.70M
 - `base`: ~3.77M
-- `medium`: ~9.39M
+- `medium`: ~9.28M
 
 Use `medium` only after you have evidence that `base` is still underfitting relative to your token budget and hardware.
