@@ -31,7 +31,7 @@
 \maketitle
 
 \begin{abstract}
-	This report documents the implementation of an xLSTM-based pipeline for symbolic music generation. The project uses MIDI files from the matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag annotations, and constructs deterministic train/validation/test splits with explicit controls against metadata and content leakage. Music is represented as discrete event sequences using a MidiTok REMI configuration with REMI+-style extensions in the active experimental tokenizer, and xLSTM language models are trained autoregressively on fixed-length token chunks. The practical contribution of the project is a reproducible workflow covering dataset construction, preprocessing, tokenization, xLSTM training, hyperparameter exploration, checkpoint selection, generation-based evaluation, and a planned Gradio demonstration interface.
+	This report documents the implementation of an xLSTM-based pipeline for symbolic music generation. The project uses MIDI files from the matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag annotations, and constructs deterministic train/validation/test splits with explicit controls against metadata and content leakage. Music is represented as discrete event sequences using a MidiTok REMI configuration with REMI+-style extensions in the active experimental tokenizer, and xLSTM language models are trained autoregressively on fixed-length token chunks. The practical contribution of the project is a reproducible workflow covering dataset construction, preprocessing, tokenization, xLSTM training, hyperparameter exploration and model selection.
 \end{abstract}
 
 \input{sections/introduction}
@@ -54,15 +54,15 @@
 
 \input{sections/results}
 
-\input{sections/gradio_demo}
-
 \input{sections/discussion}
 
 \input{sections/limitations}
 
-\input{sections/future_work}
+%\input{sections/future_work}
 
 \input{sections/conclusion}
+
+\input{sections/acknowledgement}
 
 \bibliographystyle{plainnat}
 \bibliography{references}
