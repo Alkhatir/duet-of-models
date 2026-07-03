@@ -1,8 +1,86 @@
 \section{Results}
 
-The current repository contains intermediate validation summaries but not final thesis results. Table~\ref{tab:xlstm_runs} reports the best validation-loss and perplexity values available from existing experiment summaries. At this stage, these values should be used only to guide further experiments.
+The current results are validation-stage results rather than final held-out
+generation results. They show that the implemented training pipeline is able to
+train xLSTM language models on REMI-style music tokens, compare checkpoints, and
+identify stronger configurations for follow-up evaluation. The results should
+therefore be interpreted as model-selection evidence, not as a final statement
+about musical quality.
 
-% TODO: Insert final training curves here. Suggested sources: W&B exports, metrics.json time series, or generated plots from experiments/<run_name>/metrics.json.
-% TODO: Insert final held-out generation metric table from scripts/eval_generation.sh outputs.
-% TODO: Insert qualitative examples: prompt MIDI, generated MIDI, piano-roll figures, and listening observations.
+\subsection{Validation Results}
 
+Table~\ref{tab:result-checkpoints} summarizes representative completed runs from
+the local \verb|summary.json| files. The strongest validation-loss checkpoint is
+the base xLSTM with tokenizer 14 and batch size 16. The batch-size-8 tokenizer-14
+run is almost tied and keeps the same practical setup used by the broader sweep.
+The medium model does not improve the validation-selected result under its
+current 15-epoch restart schedule, even though it has more than twice as many
+parameters.
+
+\begin{table}[htbp]
+	\centering
+	\scriptsize
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrrrrrr}
+			\toprule
+			Run & Params & Tok. & Batch & Steps & Best step & Best val. loss & Best val. top-5 acc. \\
+			\midrule
+			\texttt{tok\_14\_batch\_16} & 3.70M & 14 & 16 & 7287 & 4000 & \textbf{1.4456} & \textbf{0.8619} \\
+			\texttt{tok\_14} & 3.70M & 14 & 8 & 14574 & 6000 & 1.4471 & 0.8614 \\
+			\texttt{constant\_1e-4} & 3.67M & 11 & 8 & 12705 & 12000 & 1.5759 & 0.8365 \\
+			\texttt{xlstm-small-batch8-tok11} & 1.63M & 11 & 8 & 12705 & 12000 & 1.5698 & 0.8388 \\
+			\texttt{xlstm-base-batch8-tok11} & 3.67M & 11 & 8 & 12705 & 10000 & 1.5811 & 0.8367 \\
+			\texttt{xlstm-medium-batch8-tok14} & 9.28M & 14 & 8 & 72870 & 9000 & 1.5173 & 0.8542 \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Representative validation results from local experiment summaries. Lower validation loss is better. The medium row reports the early best checkpoint, not the final checkpoint.}
+	\label{tab:result-checkpoints}
+\end{table}
+
+The validation ranking supports two main observations. First, tokenizer 14 is a
+better downstream representation for the current xLSTM setup than tokenizer 11,
+even though tokenizer 11 was the best tokenizer-only round-trip candidate. This
+confirms that compactness and reconstruction metrics are useful diagnostics but
+do not fully predict language-model training behavior. Second, simply increasing
+model size is not enough. The medium tokenizer-14 run reaches its best validation
+loss early and then overfits, so its final checkpoint is worse than its selected
+checkpoint and worse than the base tokenizer-14 candidates.
+
+\subsection{Compute Summary}
+
+Table~\ref{tab:compute-summary} reports the logged wall-clock runtime recorded
+in W\&B, together with GPU metadata from each run's \verb|wandb-metadata.json|
+file. These values are approximate compute accounting numbers for the practical
+work: they combine runs made during different stages of the search and should
+not be read as controlled hardware benchmarks.
+
+\begin{table}[htbp]
+	\centering
+	\small
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrlll}
+			\toprule
+			Experiment stage & Runs & Logged hours & GPU used & VRAM & Purpose \\
+			\midrule
+			Warm-up scale/batch checks & 4 & 6.78 & RTX 3050 / RTX 3060 & 6 / 12 GiB & Verify training behavior and basic scale choices \\
+			Learning-rate sweep & 10 & 15.86 & RTX 3060 & 12 GiB & Compare scheduler and learning-rate settings \\
+			Tokenizer sweep & 8 & 13.85 & RTX 3060 & 12 GiB & Compare REMI-style tokenizer conditions \\
+			Refined tokenizer--batch sweep & 6 & 11.53 & RTX 3060 & 12 GiB & Recheck tokenizer 10/14 with batch sizes 4, 8, and 16 \\
+			Medium-model follow-up & 1 & 17.76 & RTX 3060 & 12 GiB & Test larger xLSTM capacity with longer training \\
+			\midrule
+			Total summarized xLSTM training & 29 & 65.78 & Mixed RTX 3050/3060 runs & 6--12 GiB & Validation-stage experimental budget \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Approximate compute used by completed xLSTM experiments, aggregated from W\&B runtime summaries and run metadata.}
+	\label{tab:compute-summary}
+\end{table}
+
+The compute distribution also explains the current confidence level of the
+results. The majority of the budget was spent on validation sweeps rather than
+on one final long training run. This is appropriate for the current practical
+phase because the main uncertainty was representation and optimization choice.
+The next evaluation step should spend compute on held-out generation from the
+shortlisted checkpoints rather than on extending the same validation-only
+ranking.
