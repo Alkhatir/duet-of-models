@@ -12,16 +12,16 @@ The current split report records 36,199 candidate MIDI rows, of which 35,979 are
 
 \begin{table}[htbp]
 	\centering
-	\begin{tabular}{lr}
+	\begin{tabular}{lrr}
 		\toprule
-		Split      & MIDI files \\
+		Split      & MIDI files & Music IDs \\
 		\midrule
-		Train      & 1600       \\
-		Validation & 200        \\
-		Test       & 200        \\
+		Train      & 1600       & 1040      \\
+		Validation & 200        & 86        \\
+		Test       & 200        & 104       \\
 		\bottomrule
 	\end{tabular}
-	\caption{Current train/validation/test split sizes stored in \texttt{data\_reports/splits/}.}
+	\caption{Current train/validation/test split sizes stored in \texttt{data\_reports/splits/}, including unique music IDs per split.}
 	\label{tab:splits}
 \end{table}
 
