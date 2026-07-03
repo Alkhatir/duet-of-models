@@ -26,7 +26,11 @@ interpreted as proof that the medium architecture is worse in general. The
 experiment changes model size, epoch count, and learning-rate schedule together,
 so it identifies a weak training recipe rather than isolating one cause.
 
-Validation loss remains only a proxy for generation quality. It measures
+Validation loss remains only a proxy for generation quality, a limitation also
+reflected in prior symbolic-music generation work that combines objective
+metrics with qualitative or task-specific evaluation
+\citep{dongMuseGANMultitrackSequential2017,ensMMMExploringConditional2020}.
+It measures
 next-token prediction against reference MIDI chunks, not whether sampled
 continuations decode cleanly, avoid excessive repetition, preserve musical form,
 or sound coherent. The current best candidates should therefore be evaluated
