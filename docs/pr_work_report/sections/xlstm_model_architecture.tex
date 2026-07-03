@@ -1,6 +1,6 @@
 \section{xLSTM Model Architecture}
 
-xLSTM extends the LSTM family with exponential gating and modified scalar and matrix memory structures designed for scalable language modeling \citep{beckXLSTMExtendedLong2024}. The implementation provided by NXAI \footnote{\url{https://github.com/nx-ai/xlstm}} uses the \verb|xlstm| package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+ token IDs. The training code fills in \verb|vocab_size| from the tokenizer and \verb|context_length| from the data block size at runtime. Therefore, the model YAML files specify architectural scaling parameters rather than corpus-specific values.
+xLSTM \citep{beckXLSTMExtendedLong2024} extends the LSTM \citep{hochreiterLongShortTermMemory1997} family with exponential gating and modified scalar and matrix memory structures designed for scalable language modeling. The implementation provided by NXAI \footnote{\url{https://github.com/nx-ai/xlstm}} uses the \verb|xlstm| package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+ token IDs. The training code fills in \verb|vocab_size| from the tokenizer and \verb|context_length| from the data block size at runtime. Therefore, the model YAML files specify architectural scaling parameters rather than corpus-specific values.
 
 The repository defines a simple scaling ladder in \verb|configs/model/xlstm/|:
 \begin{itemize}
