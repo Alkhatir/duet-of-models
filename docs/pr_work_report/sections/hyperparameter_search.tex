@@ -8,7 +8,7 @@ The W\&B run chronology is important for interpreting these results. The first f
 
 The first runs were deliberately small in scope. They used tokenizer 11, the same train/validation split, block size 1024, and three epochs. The goal was not to select a final model, but to understand whether the xLSTM implementation, data loading, validation loop, and checkpointing behaved plausibly before spending more GPU time.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.82\textwidth]{figures/xlstm_warmup_scale_best_val_metrics.png}
 	\caption{The panels compare best validation loss, best validation perplexity, best token accuracy, and best top-5 token accuracy, with each run keeping the same color across all panels. These runs were used to check basic training behavior before larger sweeps.}
@@ -21,14 +21,14 @@ The warm-up results gave two useful signals. First, the base model was a better 
 
 The learning-rate sweep was the first controlled training hyperparameter sweep. It kept tokenizer 11, the base xLSTM, batch size 8, block size 1024, and the same three-epoch budget fixed. This avoided confounding schedule comparisons with different model capacities, tokenizers, or numbers of optimizer steps per epoch.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.90\textwidth]{figures/xlstm_lr_schedulers_sweep.png}
 	\caption{Learning-rate schedules used in the tokenizer-11 LR sweep for the base xLSTM with batch size 8, block size 1024, and three epochs. Curves are reconstructed from the resolved training configurations; the corresponding validation summaries are reported in Table~\ref{tab:xlstm-lr-sweep}.}
 	\label{fig:xlstm-lr-sweep}
 \end{figure}
 
-\begin{table}[h]
+\begin{table}[htbp]
 	\centering
 	\scriptsize
 	\resizebox{\textwidth}{!}{%
@@ -59,14 +59,14 @@ The constant \(10^{-4}\) run was the best condition inside this tokenizer-11 swe
 
 The tokenizer sweep moved from optimization tuning to representation testing. It trained the base model with batch size 8 across the strongest tokenizer candidates from the REMI+ autotune stage, including chord-enabled variants. This sweep answers a different question from the tokenizer grid in the previous section. The tokenizer grid asks how faithfully a configuration preserves MIDI under tokenization and decoding; the downstream tokenizer sweep asks how well the xLSTM learns the resulting token stream.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.88\textwidth]{figures/xlstm_tokenizer_sweep_val_metrics.png}
 	\caption{Downstream tokenizer-condition sweep with the base xLSTM, batch size 8, block size 1024, and three training epochs. The panels compare best validation loss, best validation perplexity, best token accuracy, and best top-5 token accuracy. Each tokenizer condition keeps the same color across all panels. This figure uses the exported summaries in \texttt{experiments/xlstm-base-tokenizer-batch-sweep-sched-decay-8000}.}
 	\label{fig:xlstm-tokenizer-sweep}
 \end{figure}
 
-\begin{table}[h]
+\begin{table}[htbp]
 	\centering
 	\scriptsize
 	\resizebox{\textwidth}{!}{%
@@ -95,7 +95,7 @@ This sweep changed the interpretation of the tokenizer-only result. Tokenizer 11
 
 After the tokenizer sweep, the search was narrowed to the two strongest tokenizer families, 14 and 10. The refined \texttt{best\_tok\_sweep} runs crossed those tokenizers with batch sizes 4, 8, and 16, using the same base model and the same warmup--cosine schedule. This was the point where batch size became a tuning variable again, but only after the representation search had identified stronger candidates than tokenizer 11.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.90\textwidth]{figures/xlstm_best_tok_sweep_candidate_val_loss_acc.png}
 	\caption{Each panel fixes the batch size and compares tokenizer 10 against tokenizer 14; solid lines show validation loss, dashed lines show validation token accuracy, and outlined markers identify the best validation-loss point for each run.}
@@ -110,7 +110,7 @@ The medium run was trained from the setup that looked most practical after the s
 
 The W\&B history shows that this particular long-run setup did not improve the validation-selected model. The medium run reaches its best validation loss, 1.5173, at step 9000. After that point, training loss continues to decrease from 0.9769 to 0.5449, but validation loss rises to 1.8807 by the final logged evaluation. The later learning-rate restarts perturb the curve but do not recover the early validation optimum.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.90\textwidth]{figures/xlstm_medium_lr_restart_val_curve.png}
 	\caption{Validation loss and learning-rate schedule for the medium tokenizer-14 run. The run uses cosine restarts, but its best validation point occurs early, before the first full restart cycle completes.}
