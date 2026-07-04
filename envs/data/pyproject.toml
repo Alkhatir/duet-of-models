@@ -9,7 +9,7 @@ dependencies = [
   "PyYAML>=6.0",
   "tqdm>=4.66",
   "numpy>=2.2.6",
-  "pandas>=2.3.3",
+  "pandas>=2.3.3,<3",
   "scipy>=1.15.3",
   "rich>=13.0",
   "pretty-midi>=0.2.11",
@@ -18,4 +18,5 @@ dependencies = [
   "jupyter>=1.1.1",
   "upsetplot>=0.9.0",
   "seaborn>=0.13.2",
+  "jupyterlab>=4.5.5",
 ]

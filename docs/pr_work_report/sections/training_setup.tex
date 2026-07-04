@@ -1,0 +1,53 @@
+\section{Training Setup}
+
+\subsection{Objective and Data Loading}
+
+Training is formulated as autoregressive next-token prediction over symbolic music events. After preprocessing and tokenization, each MIDI file is represented as a sequence of discrete REMI-style token IDs. For a sequence \(x_1, \ldots, x_T\), the model receives the previous tokens and is optimized to predict the next token at each position. This is the same language-modeling objective used by autoregressive symbolic-music models \citep{huangPopMusicTransformer2020,hsiaoCompoundWordTransformer2021}, but the vocabulary consists of musical events such as note, time, tempo, program, and structural tokens.
+
+The trainer does not discover data by recursively scanning the corpus at training time. Instead, it reads explicit split-list files produced by the dataset construction pipeline. Each list contains MIDI paths for one split, and the loader checks that every referenced file exists. Relative paths are resolved from the location of the list file, which keeps train/validation/test membership fixed and makes a run reproducible from the saved split manifests.
+
+The active tokenizer configuration is loaded with \verb|MidiTokBuilder| and is used before model construction. This lets the training code set two runtime model values directly from the data setup: \verb|vocab_size| comes from the tokenizer vocabulary, and \verb|context_length| comes from the configured block size. The MIDI files in the train and validation lists are then split into fixed-length token chunks with \verb|miditok.utils.split_files_for_training|. Chunk files are written to a hash-based cache under \verb|cache_chunks/|, so repeated runs with the same split and block size can reuse the same chunked representation.
+
+After chunking, the code wraps the chunk files in MidiTok's \verb|DatasetMIDI| and creates PyTorch dataloaders \citep{paszkeAutomaticDifferentiationPyTorch2017}. Training batches are shuffled, while validation batches keep a deterministic order. The \verb|DataCollator| pads variable-length examples, copies the input IDs as labels, and shifts the labels so that each position predicts the following token. Padding labels are ignored with index \verb|-100| in the cross-entropy loss, so metric and loss values are computed only on real musical tokens.
+
+The current block size is 1024 tokens. With tokenizer 11 and batch size 8, the training code reports 4,235 batches per epoch and 12,705 total training steps for three epochs, which gives a concrete scale for the completed tokenizer-11 experiments.
+
+\subsection{Optimization, Scheduling, and Logging}
+
+Training runs are launched through a shell wrapper that fixes the Python environment and forwards the experiment inputs to the xLSTM training module:
+\begin{verbatim}
+scripts/train_xlstm.sh <train_list> <val_list> <model_cfg> \
+  <tokenizer_cfg> <output_dir> [train_cfg]
+\end{verbatim}
+
+The wrapper executes \verb|python -m src.models.xlstm.train| inside the \verb|envs/xlstm| \verb|uv| environment. Its arguments define the full training context:
+\begin{itemize}
+	\item \verb|train_list| points to the text file containing the training MIDI paths;
+	\item \verb|val_list| points to the validation split used for periodic evaluation and best-checkpoint selection;
+	\item \verb|model_cfg| selects the xLSTM architecture, including the model size and block configuration;
+	\item \verb|tokenizer_cfg| selects the MidiTok REMI tokenizer used to convert MIDI files into token sequences;
+	\item \verb|output_dir| names the run directory where checkpoints, metrics, and the resolved configuration are written;
+	\item \verb|train_cfg| optionally overrides the default training configuration with a specific batch size, epoch count, optimizer schedule, logging setup, or precision setting.
+\end{itemize}
+
+Inside the training module, the model and training YAML files are merged into one resolved configuration, and \verb|output_dir| is also used as the run name. The tokenizer is loaded first so that the model vocabulary size can be derived from the active tokenizer configuration. The trainer then builds the split-specific dataloaders, constructs the xLSTM model, and trains it with AdamW \citep{loshchilovDecoupledWeightDecay2019} using the model's weight-decay parameter grouping.
+
+Optimization behavior is controlled by the training YAML rather than by hard-coded command-line flags. These configs specify parameters such as random seed, train and validation batch sizes, number of epochs, base learning rate, optional gradient clipping, evaluation interval, checkpoint interval, logging interval, device, and numeric precision. Learning-rate schedules can be expressed either with the older warmup/cosine fields or with explicit multi-phase schedules. The newer schedule configs use phases such as linear warmup, cosine decay, and constant learning-rate tails, which makes LR sweep experiments easier to compare and reproduce.
+
+During training, the loop logs average training loss, perplexity, learning rate, valid-token count, and progress at the configured logging interval. At each evaluation interval it computes validation loss, perplexity, token accuracy, top-5 token accuracy, mean token confidence, and valid-token count. If W\&B \citep{wandb} reporting is enabled in the selected training config, these values are logged to the configured W\&B project together with run metadata such as the split files, tokenizer config, output directory, model parameter count, batch sizes, block size, and total number of training steps. Checkpoints are written under the run directory at the configured save interval, and the best validation-loss checkpoint is stored separately under \verb|best/checkpoint.pt|.
+
+\subsection{Rented-GPU Training on Vast.ai}
+
+Because the xLSTM experiments require CUDA-capable hardware for practical turnaround time, the repository also contains a small Vast.ai deployment workflow. The goal of this workflow is to make rented-GPU training runs repeatable instead of relying on manual instance setup.
+
+The container image used for these runs is \verb|alkhatir/duet-of-models:cuda12.1-xlstm-vast|. It is built from \verb|DOCKERFILE_XLSTM|, which starts from the CUDA 12.1 development image, installs the build tools needed by the xLSTM environment, installs \verb|uv|, and adds utility tools such as \verb|gdown| and the Vast.ai CLI. The image also copies the repository startup script to \verb|/entry.sh| so that the same initialization logic can run automatically when a rented instance starts.
+
+Instance creation is handled by the root-level script \verb|vastai_instance_create.sh|. The script searches Vast.ai offers for supported NVIDIA GPUs with at least 12 GB of GPU memory, enough disk space, CUDA 12.1 compatibility, and a reliability threshold. It then creates an SSH-enabled instance using the configured Docker image and starts the container with:
+\begin{verbatim}
+bash /entry.sh
+\end{verbatim}
+The script exposes the most important parameters through environment variables, including the Docker image, repository branch, disk size, and the command to run after setup. By default, the post-setup command is \verb|experiments/run_xlstm_experiments_1.sh|.
+
+The entry script, \verb|entry.sh|, performs the actual machine initialization inside the container. It creates the workspace directory, clones or updates the Git repository, downloads the prepared data archive with \verb|gdown|, extracts it into the repository workspace, and synchronizes the xLSTM \verb|uv| environment. If \verb|RUN_AFTER_SETUP| is set, the script changes into the repository and launches that command, which allows a full training job to begin automatically after the instance is provisioned. Otherwise, the script keeps the container alive for SSH access, which is useful for interactive debugging or manually starting a training command.
+
+In practice, this separates the rented-machine workflow into two reproducible layers: the Docker image fixes the CUDA and Python tooling environment, while \verb|vastai_instance_create.sh| and \verb|entry.sh| fix the instance selection and startup procedure. This reduces the amount of hand configuration needed before each training run and makes it easier to rerun experiments on different rented GPUs with the same repository state and data archive.
