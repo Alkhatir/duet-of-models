@@ -1,6 +1,7 @@
 \section{Introduction}
 
-Symbolic music generation represents music as structured symbolic events, such
+Symbolic music generation represents music as structured symbolic events
+\citep{huangPopMusicTransformer2020,fradetMiditokPythonPackage2023}, such
 as note onsets, durations, velocities, programs, and timing information, rather
 than as raw audio waveforms. This representation makes it possible to model
 musical structure with sequence models while keeping the output editable as MIDI.
@@ -9,9 +10,12 @@ events that can later be decoded into notes, instruments, tempo changes, and
 other performance-related information.
 
 In this project, MIDI files are converted into discrete token sequences and
-modeled with autoregressive neural language models. The practical focus is the
-development of an xLSTM-based system for generating symbolic music continuations
-from a given prompt. The work therefore combines several engineering tasks that
+modeled with autoregressive neural language models. This follows the same broad
+sequence-modeling view used by recent symbolic-music Transformer systems
+\citep{hsiaoCompoundWordTransformer2021,ensMMMExploringConditional2020}. The
+practical focus is the development of an xLSTM-based system for generating
+symbolic music continuations from a given prompt. The work therefore combines
+several engineering tasks that
 must fit together: selecting a usable MIDI subset, constructing leakage-aware
 train/validation/test splits, choosing a token representation, training xLSTM
 models, comparing checkpoints, and preparing generated-MIDI evaluation.
