@@ -4,7 +4,7 @@ Model selection is handled in two stages. During training, the trainer selects c
 
 Across runs, the first-stage comparison uses the exported \verb|summary.json| files and W\&B histories rather than the final checkpoint alone. This distinction matters because several runs overfit or degrade after their best validation step. The clearest example is the 15-epoch medium tokenizer-14 run: its best validation loss is 1.5173 at step 9000, but the final validation loss is 1.8799 after 72,870 steps. The selected checkpoint for that run is therefore the early best checkpoint, not the final training state.
 
-\begin{table}[h]
+\begin{table}[htbp]
 	\centering
 	\scriptsize
 	\begin{tabular}{lrrrrr}
@@ -27,7 +27,7 @@ Across runs, the first-stage comparison uses the exported \verb|summary.json| fi
 
 The current first-stage candidate is the base xLSTM with tokenizer 14. The best scalar validation loss is the batch-16 run, but the batch-8 tokenizer-14 run is effectively tied and is the safer practical default for subsequent experiments because it leaves more memory headroom for larger models and generation-time diagnostics. The tokenizer-10 runs are close enough to remain useful baselines, while tokenizer 11 is no longer the preferred downstream representation despite being the tokenizer-only autotune winner.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 	\centering
 	\includegraphics[width=0.90\textwidth]{figures/xlstm_medium_overfit_curve.png}
 	\caption{Training and validation loss for the medium tokenizer-14 run. The widening gap after step 9000 shows why final-checkpoint selection would be misleading for this experiment.}
