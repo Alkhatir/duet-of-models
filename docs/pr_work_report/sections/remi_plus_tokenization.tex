@@ -38,7 +38,7 @@ Metrics where lower is better enter with a positive sign, while precision, recal
 
 The chroma-distance component is computed after the tokenizer round trip, so it compares the original MIDI file with the decoded MIDI file. The helper first converts each MIDI into a chromagram with \verb|pretty_midi| \cite{raffelINTUITIVEANALYSISCREATION}. Each frame is a 12-dimensional pitch-class vector, where octave information is collapsed and simultaneous notes are accumulated across instruments. Drum tracks are included in this autotuning run. The summed chroma frames are L2-normalized, which makes the comparison focus more on pitch-class distribution than on raw loudness or number of active notes. The two chroma sequences are then compared with dynamic time warping (DTW) \cite{giorginoComputingVisualizingDynamic2009}, using Euclidean distance between aligned chroma frames as the local cost. DTW is useful here because small timing differences introduced by tokenization and decoding should not immediately count as complete harmonic mismatches. In the current helper implementation, the normal non-empty-MIDI branch computes the best DTW cost over all 12 pitch-class rotations, so the stored \verb|chroma_dtw_score| is effectively transpose-invariant. Lower values mean that the reconstructed MIDI has a more similar pitch-class trajectory to the original.
 
-\begin{table}[h]
+\begin{table}[htbp]
 	\centering
 	\scriptsize
 	\begin{tabular}{rcccccrrr}
