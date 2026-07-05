@@ -9,7 +9,6 @@ from pathlib import Path
 from random import Random
 from typing import Any
 
-import pretty_midi
 import torch
 from dacite import from_dict
 from miditok import TokSequence
@@ -19,7 +18,6 @@ from transformers import AutoModelForCausalLM
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 from src.data.tokenizer import MidiTokBuilder
-from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
 from src.utils.midi_utils import chunk_split, load_midi_paths_from_list
 
 
@@ -90,11 +88,25 @@ class XLSTMAdapter(BaseModelAdapter):
             else:
                 model_cfg = raw_cfg
         model_cfg = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
+        converted_slstm_backend = False
+        if device.type == "cpu" and "slstm_block" in model_cfg:
+            slstm_cfg = model_cfg.slstm_block.get("slstm", None)
+            if slstm_cfg is not None and "backend" in slstm_cfg:
+                converted_slstm_backend = str(slstm_cfg.backend) != "vanilla"
+                slstm_cfg.backend = "vanilla"
         model_cfg.vocab_size = tokenizer_vocab_size
         model = xLSTMLMModel(
             from_dict(xLSTMLMModelConfig, OmegaConf.to_container(model_cfg, resolve=True))
         ).to(device)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        if converted_slstm_backend:
+            state_dict = {
+                key: value.transpose(1, 2).contiguous()
+                if key.endswith("._recurrent_kernel_") and value.ndim == 3
+                else value
+                for key, value in state_dict.items()
+            }
+        model.load_state_dict(state_dict)
         model.eval()
         self.model = model
         self._max_context_length = int(model_cfg.context_length)
@@ -196,6 +208,17 @@ def select_eval_samples(
 
 def sample_next_token(logits: torch.Tensor, cfg: DictConfig) -> int:
     sampling_cfg = cfg.sampling
+    forbidden_token_ids = sampling_cfg.get("forbidden_token_ids", [])
+    if forbidden_token_ids:
+        logits = logits.clone()
+        valid_forbidden_ids = [
+            int(token_id)
+            for token_id in forbidden_token_ids
+            if 0 <= int(token_id) < logits.size(-1)
+        ]
+        if valid_forbidden_ids:
+            logits[valid_forbidden_ids] = float("-inf")
+
     if bool(sampling_cfg.get("greedy", False)):
         return int(torch.argmax(logits, dim=-1).item())
 
@@ -235,6 +258,7 @@ def generate_continuation(
 ) -> list[int]:
     generated = prompt_ids.copy()
     continuation: list[int] = []
+    min_new_tokens = int(cfg.sampling.get("min_new_tokens", 0))
     for _ in range(max_new_tokens):
         window = generated[-adapter.max_context_length :]
         input_ids = torch.tensor(window, dtype=torch.long, device=adapter.device).unsqueeze(0)
@@ -242,7 +266,11 @@ def generate_continuation(
         next_token = sample_next_token(logits[0], cfg)
         generated.append(next_token)
         continuation.append(next_token)
-        if eos_token_id is not None and next_token == eos_token_id:
+        if (
+            eos_token_id is not None
+            and next_token == eos_token_id
+            and len(continuation) >= min_new_tokens
+        ):
             break
     return continuation
 
@@ -257,7 +285,8 @@ def compute_prompt_length(token_ids: list[int], cfg: DictConfig) -> int:
 
 
 def decode_ids_to_midi(tokenizer, token_ids: list[int], output_path: Path) -> None:
-    score = tokenizer.decode(TokSequence(ids=token_ids), output_path=output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    score = tokenizer.decode(TokSequence(ids=token_ids))
     if not output_path.exists():
         score.dump_midi(output_path)
 
@@ -347,6 +376,10 @@ def evaluate_sample(
     out_dir: Path,
     metrics_cfg: DictConfig,
 ) -> dict[str, Any]:
+    import pretty_midi
+
+    from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
+
     sample_dir = out_dir / "samples" / f"{sample.sample_id:04d}"
     prompt_path = sample_dir / "prompt.mid"
     reference_path = sample_dir / "reference.mid"
