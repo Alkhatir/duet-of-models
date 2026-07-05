@@ -7,15 +7,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from random import Random
-from typing import Any
+from typing import Any, Callable
 
 import torch
-from dacite import from_dict
 from miditok import TokSequence
 from miditok.pytorch_data import DatasetMIDI
 from omegaconf import DictConfig, OmegaConf
-from transformers import AutoModelForCausalLM
-from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
 from src.data.tokenizer import MidiTokBuilder
 from src.utils.midi_utils import chunk_split, load_midi_paths_from_list
@@ -46,84 +43,8 @@ class BaseModelAdapter:
         raise NotImplementedError
 
 
-class TransformerAdapter(BaseModelAdapter):
-    def __init__(self, checkpoint_path: Path, device: torch.device) -> None:
-        super().__init__(device)
-        self.model = AutoModelForCausalLM.from_pretrained(str(checkpoint_path)).to(device)
-        self.model.eval()
-        config = self.model.config
-        self._max_context_length = int(
-            getattr(config, "max_position_embeddings", None)
-            or getattr(config, "n_positions", None)
-            or getattr(config, "n_ctx", 1024)
-        )
-
-    @property
-    def max_context_length(self) -> int:
-        return self._max_context_length
-
-    def next_token_logits(self, input_ids: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            outputs = self.model(input_ids=input_ids)
-        return outputs.logits[:, -1, :]
-
-
-class XLSTMAdapter(BaseModelAdapter):
-    def __init__(
-        self,
-        checkpoint_path: Path,
-        model_cfg_path: Path,
-        tokenizer_vocab_size: int,
-        device: torch.device,
-    ) -> None:
-        super().__init__(device)
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        if "config" in checkpoint and "model" in checkpoint["config"]:
-            cfg = OmegaConf.create(checkpoint["config"])
-            model_cfg = cfg.model
-        else:
-            raw_cfg = OmegaConf.load(model_cfg_path)
-            if "model" in raw_cfg:
-                model_cfg = raw_cfg.model
-            else:
-                model_cfg = raw_cfg
-        model_cfg = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
-        converted_slstm_backend = False
-        if device.type == "cpu" and "slstm_block" in model_cfg:
-            slstm_cfg = model_cfg.slstm_block.get("slstm", None)
-            if slstm_cfg is not None and "backend" in slstm_cfg:
-                converted_slstm_backend = str(slstm_cfg.backend) != "vanilla"
-                slstm_cfg.backend = "vanilla"
-        model_cfg.vocab_size = tokenizer_vocab_size
-        model = xLSTMLMModel(
-            from_dict(xLSTMLMModelConfig, OmegaConf.to_container(model_cfg, resolve=True))
-        ).to(device)
-        state_dict = checkpoint["model_state_dict"]
-        if converted_slstm_backend:
-            state_dict = {
-                key: value.transpose(1, 2).contiguous()
-                if key.endswith("._recurrent_kernel_") and value.ndim == 3
-                else value
-                for key, value in state_dict.items()
-            }
-        model.load_state_dict(state_dict)
-        model.eval()
-        self.model = model
-        self._max_context_length = int(model_cfg.context_length)
-
-    @property
-    def max_context_length(self) -> int:
-        return self._max_context_length
-
-    def next_token_logits(self, input_ids: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            logits = self.model(input_ids)
-        return logits[:, -1, :]
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_type", choices=("xlstm", "transformer"), required=True)
     parser.add_argument("--checkpoint", required=True, help="Checkpoint directory or checkpoint.pt path.")
     parser.add_argument("--model_cfg", required=True, help="Model config path used as adapter fallback.")
     parser.add_argument("--tok_cfg", required=True, help="Tokenizer YAML config.")
@@ -351,25 +272,6 @@ def save_json(path: Path, payload: Any) -> None:
         json.dump(payload, fh, indent=2, sort_keys=True)
 
 
-def build_adapter(
-    model_type: str,
-    checkpoint_path: Path,
-    model_cfg_path: Path,
-    tokenizer_vocab_size: int,
-    device: torch.device,
-) -> BaseModelAdapter:
-    if model_type == "transformer":
-        return TransformerAdapter(checkpoint_path=checkpoint_path, device=device)
-    if model_type == "xlstm":
-        return XLSTMAdapter(
-            checkpoint_path=checkpoint_path,
-            model_cfg_path=model_cfg_path,
-            tokenizer_vocab_size=tokenizer_vocab_size,
-            device=device,
-        )
-    raise ValueError(f"Unsupported model_type: {model_type}")
-
-
 def evaluate_sample(
     sample: GenerationSample,
     tokenizer,
@@ -437,8 +339,16 @@ def evaluate_sample(
     return result
 
 
-def main() -> None:
-    args = parse_args()
+AdapterFactory = Callable[[Path, Path, int, torch.device], BaseModelAdapter]
+
+
+def run_generation_evaluation(
+    *,
+    model_type: str,
+    adapter_factory: AdapterFactory,
+    args: argparse.Namespace | None = None,
+) -> None:
+    args = parse_args() if args is None else args
     eval_cfg = load_eval_config(args.eval_cfg)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -448,8 +358,7 @@ def main() -> None:
     device = resolve_device(eval_cfg)
     checkpoint_path = Path(args.checkpoint)
     model_cfg_path = Path(args.model_cfg)
-    adapter = build_adapter(
-        model_type=args.model_type,
+    adapter = adapter_factory(
         checkpoint_path=checkpoint_path,
         model_cfg_path=model_cfg_path,
         tokenizer_vocab_size=len(tokenizer),
@@ -506,7 +415,7 @@ def main() -> None:
         )
 
     aggregate = aggregate_metrics(records)
-    aggregate["model_type"] = args.model_type
+    aggregate["model_type"] = model_type
     aggregate["checkpoint"] = str(checkpoint_path)
     save_json(out_dir / "aggregate_metrics.json", aggregate)
     save_json(out_dir / "per_sample_metrics.json", records)
@@ -520,4 +429,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(
+        "Use a model-specific evaluator: "
+        "python -m src.models.Transformer.generate_and_score or "
+        "python -m src.models.xlstm.generate_and_score"
+    )
