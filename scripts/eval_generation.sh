@@ -10,8 +10,22 @@ DATA_LIST="${5:?split_list required}"
 OUT_DIR="${6:?out_dir required}"
 EVAL_CFG="${7:-configs/eval/generation_shared.yaml}"
 
-uv run --project envs/eval python -m src.evaluation.generate_and_score \
-  --model_type "$MODEL_TYPE" \
+case "$MODEL_TYPE" in
+  transformer|gpt2)
+    PROJECT="envs/gpt2"
+    MODULE="src.models.Transformer.generate_and_score"
+    ;;
+  xlstm)
+    PROJECT="envs/xlstm"
+    MODULE="src.models.xlstm.generate_and_score"
+    ;;
+  *)
+    echo "ERROR: model_type must be one of: transformer, gpt2, xlstm" >&2
+    exit 2
+    ;;
+esac
+
+uv run --project "$PROJECT" python -m "$MODULE" \
   --checkpoint "$CHECKPOINT" \
   --model_cfg "$MODEL_CFG" \
   --tok_cfg "$TOKENIZER_CFG" \
