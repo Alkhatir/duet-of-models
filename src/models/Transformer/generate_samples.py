@@ -5,10 +5,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM
 
-from src.evaluation.generate_and_score import (
-    BaseModelAdapter,
-    run_generation_evaluation,
-)
+from src.evaluation.generate_and_score import BaseModelAdapter, run_sample_generation
 
 
 class TransformerAdapter(BaseModelAdapter):
@@ -44,7 +41,7 @@ def build_adapter(
 
 
 def main() -> None:
-    run_generation_evaluation(
+    run_sample_generation(
         model_type="transformer",
         adapter_factory=build_adapter,
     )

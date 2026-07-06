@@ -7,10 +7,7 @@ from dacite import from_dict
 from omegaconf import OmegaConf
 from xlstm.xlstm_lm_model import xLSTMLMModel, xLSTMLMModelConfig
 
-from src.evaluation.generate_and_score import (
-    BaseModelAdapter,
-    run_generation_evaluation,
-)
+from src.evaluation.generate_and_score import BaseModelAdapter, run_sample_generation
 
 
 class XLSTMAdapter(BaseModelAdapter):
@@ -81,7 +78,7 @@ def build_adapter(
 
 
 def main() -> None:
-    run_generation_evaluation(
+    run_sample_generation(
         model_type="xlstm",
         adapter_factory=build_adapter,
     )
