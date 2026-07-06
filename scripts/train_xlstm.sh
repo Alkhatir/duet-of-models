@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: scripts/train_xlstm.sh <train_list> <val_list> <model_cfg> <tokenizer_cfg> <output_dir> [train_cfg]
+# Usage: scripts/train_xlstm.sh <train_list> <val_list> <model_cfg> <tokenizer_cfg> <output_dir> [train_cfg] [test_list]
 TRAIN_LIST="${1:-data_reports/splits/train.txt}"
 VAL_LIST="${2:-data_reports/splits/val.txt}"
 MODEL_CFG="${3:-configs/model/xlstm/basic.yaml}"
 TOKENIZER_CFG="${4:-configs/data/tokenizer_config.yaml}"
 OUTPUT_DIR="${5:?output_dir required}"
 TRAIN_CFG="${6:-configs/train/base.yaml}"
+TEST_LIST="${7:-data_reports/splits/test.txt}"
 
 uv run --project envs/xlstm python -m src.models.xlstm.train \
   --cfg "$MODEL_CFG" \
@@ -15,4 +16,5 @@ uv run --project envs/xlstm python -m src.models.xlstm.train \
   --tok_cfg "$TOKENIZER_CFG" \
   --train_list "$TRAIN_LIST" \
   --val_list "$VAL_LIST" \
+  --test_list "$TEST_LIST" \
   --output_dir "$OUTPUT_DIR"
