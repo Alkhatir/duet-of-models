@@ -13,11 +13,11 @@ EVAL_CFG="${7:-configs/eval/generation_shared.yaml}"
 case "$MODEL_TYPE" in
   transformer|gpt2)
     PROJECT="envs/gpt2"
-    MODULE="src.models.Transformer.generate_and_score"
+    MODULE="src.models.Transformer.generate_samples"
     ;;
   xlstm)
     PROJECT="envs/xlstm"
-    MODULE="src.models.xlstm.generate_and_score"
+    MODULE="src.models.xlstm.generate_samples"
     ;;
   *)
     echo "ERROR: model_type must be one of: transformer, gpt2, xlstm" >&2
@@ -32,3 +32,9 @@ uv run --project "$PROJECT" python -m "$MODULE" \
   --data_list "$DATA_LIST" \
   --eval_cfg "$EVAL_CFG" \
   --out_dir "$OUT_DIR"
+
+uv run --project envs/data python -m src.evaluation.score_generated_midis \
+  --samples_dir "$OUT_DIR" \
+  --eval_cfg "$EVAL_CFG" \
+  --model_type "$MODEL_TYPE" \
+  --checkpoint "$CHECKPOINT"
