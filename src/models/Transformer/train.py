@@ -184,6 +184,14 @@ def filter_training_args(raw: dict[str, Any], output_dir: str) -> TrainingArgume
     kwargs.setdefault("report_to", ["none"])
     kwargs.setdefault("run_name", Path(output_dir).name)
     kwargs.setdefault("remove_unused_columns", False)
+    eval_strategy = kwargs.get(
+        "eval_strategy", kwargs.get("evaluation_strategy", "no")
+    )
+    if str(eval_strategy).lower() != "no":
+        kwargs.setdefault("save_strategy", eval_strategy)
+        kwargs.setdefault("load_best_model_at_end", True)
+        kwargs.setdefault("metric_for_best_model", "eval_loss")
+        kwargs.setdefault("greater_is_better", False)
     return TrainingArguments(**kwargs)
 
 
@@ -556,6 +564,7 @@ def train(
         callbacks=[PerplexityCallback()],
     )
     train_result = trainer.train()
+    best_checkpoint_path = trainer.state.best_model_checkpoint
     trainer.save_model(str(output_dir))
 
     final_metrics: dict[str, Any] = {
@@ -582,6 +591,9 @@ def train(
             }
         )
         final_metrics["test_evaluated"] = True
+        final_metrics["test_checkpoint_path"] = str(
+            best_checkpoint_path or output_dir
+        )
     else:
         final_metrics["test_evaluated"] = False
 
