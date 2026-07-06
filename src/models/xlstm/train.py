@@ -66,9 +66,15 @@ def build_dataloaders(
     tokenizer,
     train_list_path: Path,
     val_list_path: Path,
-) -> tuple[DataLoader, DataLoader]:
+    test_list_path: Path | None = None,
+) -> tuple[DataLoader, DataLoader, DataLoader | None]:
     train_paths = load_midi_paths_from_list(train_list_path)
     val_paths = load_midi_paths_from_list(val_list_path)
+    test_paths = (
+        load_midi_paths_from_list(test_list_path)
+        if test_list_path is not None
+        else None
+    )
 
     train_chunks = chunk_split(
         train_paths,
@@ -82,6 +88,16 @@ def build_dataloaders(
         str(split_cache_dir(val_paths, int(cfg.data.block_size), "val")),
         int(cfg.data.block_size),
     )
+    test_chunks = (
+        chunk_split(
+            test_paths,
+            tokenizer,
+            str(split_cache_dir(test_paths, int(cfg.data.block_size), "test")),
+            int(cfg.data.block_size),
+        )
+        if test_paths is not None
+        else None
+    )
 
     from miditok.pytorch_data import DataCollator, DatasetMIDI
 
@@ -93,6 +109,11 @@ def build_dataloaders(
     }
     train_ds = DatasetMIDI(files_paths=train_chunks, **common)
     val_ds = DatasetMIDI(files_paths=val_chunks, **common)
+    test_ds = (
+        DatasetMIDI(files_paths=test_chunks, **common)
+        if test_chunks is not None
+        else None
+    )
     collator = DataCollator(
         pad_token_id=tokenizer.pad_token_id,
         copy_inputs_as_labels=True,
@@ -115,7 +136,17 @@ def build_dataloaders(
         shuffle=False,
         collate_fn=collator,
     )
-    return train_loader, val_loader
+    test_loader = (
+        DataLoader(
+            test_ds,
+            batch_size=eval_batch_size,
+            shuffle=False,
+            collate_fn=collator,
+        )
+        if test_ds is not None
+        else None
+    )
+    return train_loader, val_loader, test_loader
 
 
 def build_model(cfg: DictConfig, device: torch.device) -> xLSTMLMModel:
@@ -481,6 +512,7 @@ def init_wandb_run(
     cfg: DictConfig,
     train_list_path: Path,
     val_list_path: Path,
+    test_list_path: Path | None,
     tok_cfg: str,
 ):
     if not should_log_to_wandb(cfg):
@@ -491,6 +523,7 @@ def init_wandb_run(
     run_config = OmegaConf.to_container(cfg, resolve=True)
     run_config["train_list"] = str(train_list_path)
     run_config["val_list"] = str(val_list_path)
+    run_config["test_list"] = str(test_list_path) if test_list_path else None
     run_config["tokenizer_config_path"] = tok_cfg
     run = wandb.init(
         project=str(cfg.get("wandb_project", "duet-of-models-xlstm")),
@@ -502,6 +535,7 @@ def init_wandb_run(
     run.define_metric("epoch")
     run.define_metric("train/*", step_metric="step")
     run.define_metric("val/*", step_metric="step")
+    run.define_metric("test/*", step_metric="step")
     run.define_metric("best/*", step_metric="step")
     run.define_metric("final/*", step_metric="step")
     run.define_metric("progress/*", step_metric="step")
@@ -509,6 +543,7 @@ def init_wandb_run(
     run.summary["run_name"] = str(cfg.get("run_name", ""))
     run.summary["train_list"] = str(train_list_path)
     run.summary["val_list"] = str(val_list_path)
+    run.summary["test_list"] = str(test_list_path) if test_list_path else None
     run.summary["tokenizer_config_path"] = tok_cfg
     return run
 
@@ -569,8 +604,23 @@ def save_artifacts(
     torch.save(checkpoint, output_dir / "checkpoint.pt")
     OmegaConf.save(config=cfg, f=str(output_dir / "config.resolved.yaml"))
     if metrics is not None:
-        with (output_dir / "metrics.json").open("w", encoding="utf8") as fh:
-            json.dump(metrics, fh, indent=2, sort_keys=True)
+        write_metrics(output_dir, metrics)
+
+
+def write_metrics(output_dir: Path, metrics: dict[str, Any]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "metrics.json").open("w", encoding="utf8") as fh:
+        json.dump(metrics, fh, indent=2, sort_keys=True)
+
+
+def load_model_checkpoint(
+    model: xLSTMLMModel,
+    checkpoint_path: Path,
+    device: torch.device,
+) -> dict[str, Any]:
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return checkpoint
 
 
 def train(
@@ -578,7 +628,8 @@ def train(
     train_list_path: Path,
     val_list_path: Path,
     tok_cfg: str,
-) -> dict[str, float]:
+    test_list_path: Path | None = None,
+) -> dict[str, Any]:
     seed_value = int(cfg.get("seed", 42))
     torch.manual_seed(seed_value)
 
@@ -586,11 +637,12 @@ def train(
     cfg = prepare_runtime_config(cfg, tokenizer_vocab_size=len(tokenizer))
     device = resolve_device(str(cfg.train.get("device", "cuda")))
 
-    train_loader, val_loader = build_dataloaders(
+    train_loader, val_loader, test_loader = build_dataloaders(
         cfg,
         tokenizer,
         train_list_path,
         val_list_path,
+        test_list_path,
     )
     model = build_model(cfg, device)
     weight_precision = str(cfg.train.get("weight_precision", "float32"))
@@ -601,6 +653,7 @@ def train(
         cfg,
         train_list_path=train_list_path,
         val_list_path=val_list_path,
+        test_list_path=test_list_path,
         tok_cfg=tok_cfg,
     )
 
@@ -613,6 +666,7 @@ def train(
     steps_per_epoch = len(train_loader)
     total_train_steps = steps_per_epoch * epochs
     val_steps = len(val_loader)
+    test_steps = len(test_loader) if test_loader is not None else 0
 
     if wandb_run is not None:
         wandb_run.summary["model/num_parameters"] = sum(
@@ -623,6 +677,7 @@ def train(
         )
         wandb_run.summary["data/train_batches_per_epoch"] = steps_per_epoch
         wandb_run.summary["data/val_batches"] = val_steps
+        wandb_run.summary["data/test_batches"] = test_steps
         wandb_run.summary["data/train_batch_size"] = int(
             cfg.train.per_device_train_batch_size
         )
@@ -814,23 +869,56 @@ def train(
             else val_metrics["mean_token_confidence"]
         ),
         "test_evaluated": False,
-        "test_note": "Test split is not evaluated during training. Run a separate evaluation on the selected checkpoint.",
+        "test_checkpoint_path": None,
     }
+
+    best_checkpoint_path = output_dir / "best" / "checkpoint.pt"
     save_artifacts(model, optimizer, cfg, output_dir, global_step, final_metrics)
-    if wandb_run is not None:
-        wandb_run.log(
+
+    test_metrics: dict[str, float] | None = None
+    if test_loader is not None:
+        load_model_checkpoint(model, best_checkpoint_path, device)
+        test_metrics = evaluate(model, test_loader, cfg, device)
+
+    if test_metrics is not None:
+        final_metrics["test_evaluated"] = True
+        final_metrics["test_checkpoint_path"] = str(best_checkpoint_path)
+        final_metrics.update(
             {
-                "step": global_step,
-                "epoch": float(epochs),
-                "final/val_loss": val_metrics["loss"],
-                "final/val_perplexity": val_metrics["perplexity"],
-                "final/val_token_accuracy": val_metrics["token_accuracy"],
-                "final/val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
-                "best/val_loss": final_metrics["best_val_loss"],
-                "best/val_perplexity": final_metrics["best_val_perplexity"],
-            },
-            step=global_step,
+                "test_loss": test_metrics["loss"],
+                "test_perplexity": test_metrics["perplexity"],
+                "test_token_accuracy": test_metrics["token_accuracy"],
+                "test_top5_token_accuracy": test_metrics["top5_token_accuracy"],
+                "test_mean_token_confidence": test_metrics["mean_token_confidence"],
+                "test_valid_tokens": test_metrics["valid_tokens"],
+            }
         )
+        write_metrics(output_dir, final_metrics)
+    if wandb_run is not None:
+        final_log = {
+            "step": global_step,
+            "epoch": float(epochs),
+            "final/val_loss": val_metrics["loss"],
+            "final/val_perplexity": val_metrics["perplexity"],
+            "final/val_token_accuracy": val_metrics["token_accuracy"],
+            "final/val_top5_token_accuracy": val_metrics["top5_token_accuracy"],
+            "best/val_loss": final_metrics["best_val_loss"],
+            "best/val_perplexity": final_metrics["best_val_perplexity"],
+        }
+        if test_metrics is not None:
+            final_log.update(
+                {
+                    "test/loss": test_metrics["loss"],
+                    "test/perplexity": test_metrics["perplexity"],
+                    "test/token_accuracy": test_metrics["token_accuracy"],
+                    "test/top5_token_accuracy": test_metrics["top5_token_accuracy"],
+                    "test/mean_token_confidence": test_metrics[
+                        "mean_token_confidence"
+                    ],
+                    "test/valid_tokens": test_metrics["valid_tokens"],
+                }
+            )
+        wandb_run.log(final_log, step=global_step)
         wandb_run.summary["final/global_step"] = global_step
         wandb_run.summary["final/val_loss"] = val_metrics["loss"]
         wandb_run.summary["final/val_perplexity"] = val_metrics["perplexity"]
@@ -839,6 +927,11 @@ def train(
         wandb_run.summary["best/checkpoint_path"] = str(
             output_dir / "best" / "checkpoint.pt"
         )
+        if test_metrics is not None:
+            wandb_run.summary["test/loss"] = test_metrics["loss"]
+            wandb_run.summary["test/perplexity"] = test_metrics["perplexity"]
+            wandb_run.summary["test/token_accuracy"] = test_metrics["token_accuracy"]
+            wandb_run.summary["test/checkpoint_path"] = str(best_checkpoint_path)
         wandb_run.summary["metrics_path"] = str(output_dir / "metrics.json")
         wandb_run.finish()
     return final_metrics
@@ -868,6 +961,11 @@ def main() -> None:
         help="Path to the file containing validation MIDI paths.",
     )
     parser.add_argument(
+        "--test_list",
+        default=None,
+        help="Optional path to the file containing test MIDI paths.",
+    )
+    parser.add_argument(
         "--output_dir",
         required=True,
         help="Directory where checkpoints, resolved config, and metrics are written.",
@@ -880,6 +978,7 @@ def main() -> None:
         cfg,
         train_list_path=Path(args.train_list),
         val_list_path=Path(args.val_list),
+        test_list_path=Path(args.test_list) if args.test_list else None,
         tok_cfg=args.tok_cfg,
     )
     print(json.dumps(metrics, indent=2, sort_keys=True))
