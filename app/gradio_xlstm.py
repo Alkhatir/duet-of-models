@@ -20,7 +20,7 @@ from src.evaluation.generate_and_score import (
     decode_ids_to_midi,
     generate_continuation,
 )
-from src.models.xlstm.generate_and_score import XLSTMAdapter
+from src.models.xlstm.generate_samples import XLSTMAdapter
 
 
 DEFAULT_CHECKPOINT = "experiments/xlstm-small-batch8-tok11/best/checkpoint.pt"
