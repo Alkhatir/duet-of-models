@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -51,16 +50,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_list", required=True, help="Text file containing MIDI paths.")
     parser.add_argument("--eval_cfg", default="configs/eval/generation_shared.yaml")
     parser.add_argument("--out_dir", required=True)
-    parser.add_argument("--wandb", action="store_true", help="Enable W&B logging regardless of config.")
-    parser.add_argument("--wandb_project", default=None)
-    parser.add_argument("--wandb_run_name", default=None)
     return parser.parse_args()
 
 
 def load_eval_config(eval_cfg_path: str) -> DictConfig:
     cfg = OmegaConf.load(eval_cfg_path)
     metrics_cfg_path = str(cfg.get("metrics_config", "configs/eval/music_metrics.yaml"))
-    cfg.metrics = OmegaConf.load(metrics_cfg_path)
+    if Path(metrics_cfg_path).is_file():
+        cfg.metrics = OmegaConf.load(metrics_cfg_path)
     OmegaConf.resolve(cfg)
     return cfg
 
@@ -212,25 +209,6 @@ def decode_ids_to_midi(tokenizer, token_ids: list[int], output_path: Path) -> No
         score.dump_midi(output_path)
 
 
-def maybe_init_wandb(cfg: DictConfig, args: argparse.Namespace, out_dir: Path):
-    enabled = bool(cfg.wandb.get("enabled", False)) or bool(args.wandb)
-    if not enabled:
-        return None
-    import wandb
-
-    project = args.wandb_project or str(cfg.wandb.get("project", "duet-of-models"))
-    run_name = args.wandb_run_name or cfg.wandb.get("run_name", None)
-    run = wandb.init(
-        project=project,
-        name=run_name,
-        config=OmegaConf.to_container(cfg, resolve=True),
-        reinit=True,
-        settings=wandb.Settings(start_method="fork"),
-    )
-    run.summary["output_dir"] = str(out_dir)
-    return run
-
-
 def compute_repetition_4gram(token_ids: list[int]) -> float:
     if len(token_ids) < 4:
         return 0.0
@@ -246,42 +224,17 @@ def compute_repetition_4gram(token_ids: list[int]) -> float:
     return repeated / max(total, 1)
 
 
-def aggregate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
-    numeric_totals: dict[str, float] = {}
-    numeric_counts: dict[str, int] = {}
-    for record in records:
-        for key, value in record.items():
-            if isinstance(value, bool) or value is None:
-                continue
-            if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                numeric_totals[key] = numeric_totals.get(key, 0.0) + float(value)
-                numeric_counts[key] = numeric_counts.get(key, 0) + 1
-    aggregated = {
-        key: numeric_totals[key] / numeric_counts[key] for key in sorted(numeric_totals)
-    }
-    aggregated["num_samples"] = len(records)
-    aggregated["decode_success_count"] = sum(1 for record in records if record.get("decode_success"))
-    aggregated["decode_failure_count"] = len(records) - aggregated["decode_success_count"]
-    aggregated["decode_success_rate"] = aggregated["decode_success_count"] / max(len(records), 1)
-    return aggregated
-
-
 def save_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf8") as fh:
         json.dump(payload, fh, indent=2, sort_keys=True)
 
 
-def evaluate_sample(
+def write_generation_sample(
     sample: GenerationSample,
     tokenizer,
     out_dir: Path,
-    metrics_cfg: DictConfig,
 ) -> dict[str, Any]:
-    import pretty_midi
-
-    from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
-
     sample_dir = out_dir / "samples" / f"{sample.sample_id:04d}"
     prompt_path = sample_dir / "prompt.mid"
     reference_path = sample_dir / "reference.mid"
@@ -300,25 +253,8 @@ def evaluate_sample(
         decode_ids_to_midi(tokenizer, sample.prompt_ids, prompt_path)
         decode_ids_to_midi(tokenizer, sample.reference_ids, reference_path)
         decode_ids_to_midi(tokenizer, sample.generated_ids, generated_path)
-        prompt_end_s = pretty_midi.PrettyMIDI(str(prompt_path)).get_end_time()
-        metrics = midi_roundtrip_metrics_onset_chroma(
-            original_mid=str(reference_path),
-            reconstructed_mid=str(generated_path),
-            onset_tol=float(metrics_cfg.onset_tolerance_sec),
-            include_drums=bool(metrics_cfg.include_drums),
-            fs_chroma=int(metrics_cfg.chroma_fs),
-            calculate_transpose_invariant_chroma=bool(metrics_cfg.transpose_invariant),
-            start_s=float(prompt_end_s),
-            max_len_s=None,
-        )
         result.update(
             {
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "onset_mae_sec": metrics["onset_mae_sec"],
-                "dur_mae_sec": metrics["dur_mae_sec"],
-                "chroma_dtw": metrics["chroma_dtw"],
                 "decode_success": True,
                 "prompt_midi": str(prompt_path),
                 "reference_midi": str(reference_path),
@@ -342,7 +278,7 @@ def evaluate_sample(
 AdapterFactory = Callable[[Path, Path, int, torch.device], BaseModelAdapter]
 
 
-def run_generation_evaluation(
+def run_sample_generation(
     *,
     model_type: str,
     adapter_factory: AdapterFactory,
@@ -353,6 +289,17 @@ def run_generation_evaluation(
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     save_json(out_dir / "eval_config.resolved.json", OmegaConf.to_container(eval_cfg, resolve=True))
+    save_json(
+        out_dir / "generation_config.json",
+        {
+            "model_type": model_type,
+            "checkpoint": str(Path(args.checkpoint)),
+            "model_cfg": str(Path(args.model_cfg)),
+            "tok_cfg": args.tok_cfg,
+            "data_list": args.data_list,
+            "eval_cfg": args.eval_cfg,
+        },
+    )
 
     tokenizer = MidiTokBuilder.from_yaml(args.tok_cfg).to_MidiTok()
     device = resolve_device(eval_cfg)
@@ -364,8 +311,6 @@ def run_generation_evaluation(
         tokenizer_vocab_size=len(tokenizer),
         device=device,
     )
-    wandb_run = maybe_init_wandb(eval_cfg, args, out_dir)
-
     samples = select_eval_samples(
         data_list_path=Path(args.data_list),
         tokenizer=tokenizer,
@@ -406,31 +351,30 @@ def run_generation_evaluation(
             generated_length=len(continuation_ids),
         )
         records.append(
-            evaluate_sample(
+            write_generation_sample(
                 sample=sample,
                 tokenizer=tokenizer,
                 out_dir=out_dir,
-                metrics_cfg=eval_cfg.metrics,
             )
         )
 
-    aggregate = aggregate_metrics(records)
-    aggregate["model_type"] = model_type
-    aggregate["checkpoint"] = str(checkpoint_path)
-    save_json(out_dir / "aggregate_metrics.json", aggregate)
-    save_json(out_dir / "per_sample_metrics.json", records)
+    summary = {
+        "model_type": model_type,
+        "checkpoint": str(checkpoint_path),
+        "num_samples": len(records),
+        "decode_success_count": sum(1 for record in records if record.get("decode_success")),
+        "decode_failure_count": sum(1 for record in records if not record.get("decode_success")),
+    }
+    summary["decode_success_rate"] = summary["decode_success_count"] / max(len(records), 1)
+    save_json(out_dir / "generation_summary.json", summary)
+    save_json(out_dir / "generation_samples.json", records)
 
-    if wandb_run is not None:
-        wandb_run.log({f"eval/{key}": value for key, value in aggregate.items() if isinstance(value, (int, float))})
-        wandb_run.summary["aggregate_metrics_path"] = str(out_dir / "aggregate_metrics.json")
-        wandb_run.finish()
-
-    print(json.dumps(aggregate, indent=2, sort_keys=True))
+    print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
     raise SystemExit(
         "Use a model-specific evaluator: "
-        "python -m src.models.Transformer.generate_and_score or "
-        "python -m src.models.xlstm.generate_and_score"
+        "python -m src.models.Transformer.generate_samples or "
+        "python -m src.models.xlstm.generate_samples"
     )
