@@ -17,9 +17,11 @@ commands=(
   "$UV_BIN run --project envs/data python -m src.data.midi_preprocess --help"
   "$UV_BIN run --project envs/data python -m src.data.create_dataset_splits --help"
   "$UV_BIN run --project envs/data python -m src.data.tokenizer --help"
-  "$UV_BIN run --project envs/eval python -m src.evaluation.generate_and_score --help"
+  "$UV_BIN run --project envs/data python -m src.evaluation.score_generated_midis --help"
   "$UV_BIN run --project envs/gpt2 python -m src.models.Transformer.train --help"
+  "$UV_BIN run --project envs/gpt2 python -m src.models.Transformer.generate_samples --help"
   "$UV_BIN run --project envs/xlstm python -m src.models.xlstm.train --help"
+  "$UV_BIN run --project envs/xlstm python -m src.models.xlstm.generate_samples --help"
 )
 
 failures=0
