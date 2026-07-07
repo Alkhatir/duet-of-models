@@ -4,12 +4,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 from omegaconf import OmegaConf
 
 pytest.importorskip("transformers")
 pytest.importorskip("wandb")
 
-from src.models.Transformer.train import build_datasets, compute_token_metrics
+from src.models.Transformer.train import (
+    build_datasets,
+    compute_token_metrics,
+    compute_torch_token_metric_counts,
+)
 
 
 def test_transformer_token_metrics_match_causal_lm_shift() -> None:
@@ -51,6 +56,22 @@ def test_transformer_token_metrics_ignore_shifted_padding_labels() -> None:
 
     assert metrics["valid_tokens"] == 2
     assert metrics["token_accuracy"] == pytest.approx(0.5)
+
+
+def test_torch_train_metric_counts_match_causal_lm_shift() -> None:
+    labels = torch.tensor([[10, 11, -100, 13]])
+    logits = torch.zeros((1, 4, 20))
+    logits[0, 0, 11] = 10.0
+    logits[0, 1, 2] = 10.0
+    logits[0, 1, 13] = 9.0
+    logits[0, 2, 3] = 10.0
+    logits[0, 2, 13] = 9.0
+
+    counts = compute_torch_token_metric_counts(logits, labels)
+
+    assert counts["valid_tokens"] == 2
+    assert counts["correct"] == 1
+    assert counts["top5_correct"] == 2
 
 
 def test_transformer_build_datasets_uses_unshifted_collator_with_test_split(
