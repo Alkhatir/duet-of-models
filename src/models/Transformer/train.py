@@ -40,6 +40,101 @@ class PerplexityCallback(TrainerCallback):
             logs["train_perplexity"] = math.exp(min(20.0, logs["loss"]))
 
 
+def compute_torch_token_metric_counts(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> dict[str, float]:
+    if logits.size(-2) < 2 or labels.size(-1) < 2:
+        return {"correct": 0.0, "top5_correct": 0.0, "valid_tokens": 0.0}
+
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+    valid_mask = shift_labels != -100
+    valid_count = int(valid_mask.sum().item())
+    if valid_count == 0:
+        return {"correct": 0.0, "top5_correct": 0.0, "valid_tokens": 0.0}
+
+    valid_logits = shift_logits[valid_mask]
+    valid_labels = shift_labels[valid_mask]
+    predictions = valid_logits.argmax(dim=-1)
+    topk = min(5, valid_logits.size(-1))
+    topk_predictions = valid_logits.topk(topk, dim=-1).indices
+
+    return {
+        "correct": float((predictions == valid_labels).sum().item()),
+        "top5_correct": float(
+            (topk_predictions == valid_labels.unsqueeze(-1))
+            .any(dim=-1)
+            .sum()
+            .item()
+        ),
+        "valid_tokens": float(valid_count),
+    }
+
+
+class TokenMetricTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reset_train_token_metric_counts()
+
+    def _reset_train_token_metric_counts(self) -> None:
+        self._train_token_correct = 0.0
+        self._train_top5_token_correct = 0.0
+        self._train_valid_tokens = 0.0
+
+    def _update_train_token_metric_counts(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> None:
+        counts = compute_torch_token_metric_counts(
+            logits.detach(),
+            labels.detach(),
+        )
+        self._train_token_correct += counts["correct"]
+        self._train_top5_token_correct += counts["top5_correct"]
+        self._train_valid_tokens += counts["valid_tokens"]
+
+    def _consume_train_token_metrics(self) -> dict[str, float]:
+        if self._train_valid_tokens <= 0:
+            return {}
+
+        metrics = {
+            "token_accuracy": self._train_token_correct / self._train_valid_tokens,
+            "top5_token_accuracy": (
+                self._train_top5_token_correct / self._train_valid_tokens
+            ),
+            "valid_tokens": self._train_valid_tokens,
+        }
+        self._reset_train_token_metric_counts()
+        return metrics
+
+    def compute_loss(
+        self,
+        model: torch.nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        return_outputs: bool = False,
+        num_items_in_batch: torch.Tensor | int | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, Any]:
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        loss = outputs["loss"] if isinstance(outputs, dict) else outputs.loss
+
+        if model.training and labels is not None:
+            logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+            self._update_train_token_metric_counts(logits, labels)
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        is_eval_or_test_log = any(
+            key.startswith(("eval_", "test_")) for key in logs
+        )
+        if not is_eval_or_test_log:
+            logs.update(self._consume_train_token_metrics())
+        super().log(logs, start_time=start_time)
+
+
 def load_resolved_config(model_cfg_path: str, train_cfg_path: str) -> DictConfig:
     train_cfg = OmegaConf.load(train_cfg_path)
     model_cfg = OmegaConf.load(model_cfg_path)
@@ -578,7 +673,7 @@ def train(
         tok_cfg=tok_cfg,
     )
 
-    trainer = Trainer(
+    trainer = TokenMetricTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
@@ -598,11 +693,11 @@ def train(
         for key, value in train_result.metrics.items()
         if isinstance(value, int | float)
     }
-    val_metrics = trainer.evaluate(eval_dataset=val_ds, metric_key_prefix="val")
+    eval_metrics = trainer.evaluate(eval_dataset=val_ds, metric_key_prefix="eval")
     final_metrics.update(
         {
             key: float(value)
-            for key, value in _add_perplexity(val_metrics, "val_loss").items()
+            for key, value in _add_perplexity(eval_metrics, "eval_loss").items()
             if isinstance(value, int | float)
         }
     )
