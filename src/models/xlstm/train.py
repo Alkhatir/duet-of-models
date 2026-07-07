@@ -1,6 +1,8 @@
 import argparse
 import json
 import math
+import os
+import shutil
 import warnings
 from pathlib import Path
 from typing import Any
@@ -623,6 +625,23 @@ def load_model_checkpoint(
     return checkpoint
 
 
+def cleanup_before_test_eval() -> None:
+    if os.environ.get("DELETE_XLSTM_VENV_BEFORE_TEST_EVAL", "0") != "1":
+        return
+    venv_dir = Path(os.environ.get("XLSTM_VENV_DIR", "envs/xlstm/.venv"))
+    expected_suffix = Path("envs/xlstm/.venv")
+    if venv_dir.parts[-len(expected_suffix.parts) :] != expected_suffix.parts:
+        raise ValueError(
+            "Refusing to delete XLSTM_VENV_DIR before test eval because it does "
+            f"not end with {expected_suffix}: {venv_dir}"
+        )
+    if venv_dir.is_dir():
+        print(f"Deleting {venv_dir} before xLSTM test evaluation.")
+        shutil.rmtree(venv_dir)
+    else:
+        print(f"Skipping xLSTM venv deletion before test eval: {venv_dir} does not exist.")
+
+
 def train(
     cfg: DictConfig,
     train_list_path: Path,
@@ -877,6 +896,7 @@ def train(
 
     test_metrics: dict[str, float] | None = None
     if test_loader is not None:
+        cleanup_before_test_eval()
         load_model_checkpoint(model, best_checkpoint_path, device)
         test_metrics = evaluate(model, test_loader, cfg, device)
 
