@@ -14,3 +14,8 @@ dependencies = [
   "PyYAML>=6.0",
   "tqdm>=4.66",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
