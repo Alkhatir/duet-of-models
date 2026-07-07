@@ -24,7 +24,6 @@ from transformers import (
 
 from src.data.tokenizer import MidiTokBuilder
 from src.utils.midi_utils import (
-    build_three_datasets_from_chunks,
     chunk_split,
     load_midi_paths_from_list,
     split_cache_dir,
@@ -117,23 +116,16 @@ def build_datasets(
     val_list_path: Path,
     test_list_path: Path | None = None,
 ):
-    max_seq_len = int(cfg.data.block_size)
-    if test_list_path is not None:
-        train_midis = load_midi_paths_from_list(train_list_path)
-        val_midis = load_midi_paths_from_list(val_list_path)
-        test_midis = load_midi_paths_from_list(test_list_path)
-        return build_three_datasets_from_chunks(
-            tokenizer=tokenizer,
-            train_src=train_midis,
-            val_src=val_midis,
-            test_src=test_midis,
-            max_seq_len=max_seq_len,
-        )
-
     from miditok.pytorch_data import DataCollator, DatasetMIDI
 
+    max_seq_len = int(cfg.data.block_size)
     train_midis = load_midi_paths_from_list(train_list_path)
     val_midis = load_midi_paths_from_list(val_list_path)
+    test_midis = (
+        load_midi_paths_from_list(test_list_path)
+        if test_list_path is not None
+        else None
+    )
     train_chunks = chunk_split(
         train_midis,
         tokenizer,
@@ -146,6 +138,16 @@ def build_datasets(
         str(split_cache_dir(val_midis, max_seq_len, "val")),
         max_seq_len,
     )
+    test_chunks = (
+        chunk_split(
+            test_midis,
+            tokenizer,
+            str(split_cache_dir(test_midis, max_seq_len, "test")),
+            max_seq_len,
+        )
+        if test_midis is not None
+        else None
+    )
     common = {
         "tokenizer": tokenizer,
         "max_seq_len": max_seq_len,
@@ -154,12 +156,17 @@ def build_datasets(
     }
     train_ds = DatasetMIDI(files_paths=train_chunks, **common)
     val_ds = DatasetMIDI(files_paths=val_chunks, **common)
+    test_ds = (
+        DatasetMIDI(files_paths=test_chunks, **common)
+        if test_chunks is not None
+        else None
+    )
     collator = DataCollator(
         pad_token_id=tokenizer.pad_token_id,
         copy_inputs_as_labels=True,
-        shift_labels=True,
+        shift_labels=False,
     )
-    return train_ds, val_ds, None, collator
+    return train_ds, val_ds, test_ds, collator
 
 
 def _normalise_training_arg_names(raw: dict[str, Any]) -> dict[str, Any]:
@@ -486,6 +493,25 @@ def compute_token_metrics(eval_pred) -> dict[str, float]:
         token_predictions = predictions
         top5_predictions = np.expand_dims(predictions, axis=-1)
         confidences = np.ones_like(predictions, dtype=np.float32)
+
+    token_predictions = np.asarray(token_predictions)
+    top5_predictions = np.asarray(top5_predictions)
+    confidences = np.asarray(confidences)
+    labels = np.asarray(labels)
+
+    if labels.shape[-1] < 2:
+        return {
+            "token_accuracy": 0.0,
+            "top5_token_accuracy": 0.0,
+            "mean_token_confidence": 0.0,
+            "valid_tokens": 0.0,
+        }
+
+    # Hugging Face causal LM loss compares logits[:, :-1] to labels[:, 1:].
+    token_predictions = token_predictions[..., :-1]
+    top5_predictions = top5_predictions[..., :-1, :]
+    confidences = confidences[..., :-1]
+    labels = labels[..., 1:]
 
     valid_mask = labels != -100
     valid_count = int(valid_mask.sum())
