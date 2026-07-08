@@ -14,6 +14,15 @@ set -euo pipefail
 #   GENERATED_MIDI_ROOT=${OUTPUT_ROOT}/generated_midis
 #   RUN_GAP_SECONDS=30
 #   DELETE_GPT2_VENV_AFTER_GENERATION=1
+#   GENERATION_DEVICE=cuda
+#   START_AT=gpt2_train
+#
+# Resume controls:
+#   START_AT=gpt2_train      Train GPT-2, generate GPT-2, train LLaMA, generate LLaMA, score.
+#   START_AT=gpt2_generate   Skip GPT-2 training, then continue from GPT-2 generation.
+#   START_AT=llama_train     Skip GPT-2 stages, train LLaMA, generate LLaMA, score.
+#   START_AT=llama_generate  Skip both training stages and GPT-2 generation, then generate LLaMA and score.
+#   START_AT=score           Skip training/generation and only score existing generated samples.
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
@@ -28,10 +37,20 @@ GENERATED_MIDI_ROOT="${GENERATED_MIDI_ROOT:-${OUTPUT_ROOT}/generated_midis}"
 RUN_GAP_SECONDS="${RUN_GAP_SECONDS:-30}"
 DELETE_GPT2_VENV_AFTER_GENERATION="${DELETE_GPT2_VENV_AFTER_GENERATION:-1}"
 GPT2_VENV_DIR="${GPT2_VENV_DIR:-envs/gpt2/.venv}"
+GENERATION_DEVICE="${GENERATION_DEVICE:-cuda}"
+START_AT="${START_AT:-gpt2_train}"
 
 declare -a RUNS=(
   "gpt2 configs/model/transformer/tok_14_gpt2_match.yaml ${OUTPUT_ROOT}/gpt2"
   "llama configs/model/transformer/tok_14_llama_match.yaml ${OUTPUT_ROOT}/llama"
+)
+
+declare -A STAGE_ORDER=(
+  [gpt2_train]=0
+  [gpt2_generate]=1
+  [llama_train]=2
+  [llama_generate]=3
+  [score]=4
 )
 
 between_runs() {
@@ -57,10 +76,21 @@ require_file "$TOKENIZER_CFG"
 require_file "$TRAIN_CFG"
 require_file "$EVAL_CFG"
 
+if [[ -z "${STAGE_ORDER[$START_AT]+x}" ]]; then
+  echo "Unknown START_AT value: ${START_AT}" >&2
+  echo "Expected one of: gpt2_train, gpt2_generate, llama_train, llama_generate, score" >&2
+  exit 2
+fi
+
 mkdir -p "$OUTPUT_ROOT"
 mkdir -p "$GENERATED_MIDI_ROOT"
 
 declare -a SCORE_SPECS=()
+
+stage_enabled() {
+  local stage="$1"
+  [[ "${STAGE_ORDER[$stage]}" -ge "${STAGE_ORDER[$START_AT]}" ]]
+}
 
 generate_transformer_samples() {
   local run_name="$1"
@@ -71,6 +101,7 @@ generate_transformer_samples() {
   echo "Generating full-context test samples for ${run_name}"
   echo "  checkpoint: ${checkpoint_dir}"
   echo "  eval cfg:   ${EVAL_CFG}"
+  echo "  device:     ${GENERATION_DEVICE}"
   echo "  output:     ${generation_dir}"
 
   uv run --project envs/gpt2 python -m src.models.Transformer.generate_samples \
@@ -79,6 +110,7 @@ generate_transformer_samples() {
     --tok_cfg "$TOKENIZER_CFG" \
     --data_list "$TEST_LIST" \
     --eval_cfg "$EVAL_CFG" \
+    --device "$GENERATION_DEVICE" \
     --out_dir "$generation_dir"
 }
 
@@ -104,6 +136,16 @@ collect_generated_midis() {
   local run_generated_dir="${generation_dir}/generated_midis"
   local collected_dir="${GENERATED_MIDI_ROOT}/${run_name}"
 
+  if [[ -L "$run_generated_dir" && -e "$collected_dir" ]]; then
+    echo "Generated MIDIs for ${run_name} already collected at ${collected_dir}"
+    return
+  fi
+  if [[ ! -d "$run_generated_dir" && -d "$collected_dir" ]]; then
+    mkdir -p "$generation_dir"
+    ln -s "$(realpath -m "$collected_dir")" "$run_generated_dir"
+    echo "Restored generated MIDI symlink for ${run_name}: ${run_generated_dir} -> ${collected_dir}"
+    return
+  fi
   if [[ ! -d "$run_generated_dir" ]]; then
     echo "No generated MIDI directory found for ${run_name}: ${run_generated_dir}" >&2
     exit 2
@@ -121,11 +163,17 @@ collect_generated_midis() {
 
 total_runs="${#RUNS[@]}"
 run_index=0
+start_index="${STAGE_ORDER[$START_AT]}"
+
+echo "START_AT=${START_AT}"
 
 for run_spec in "${RUNS[@]}"; do
   read -r run_name model_cfg output_dir <<<"$run_spec"
   require_file "$model_cfg"
   run_index=$((run_index + 1))
+  train_stage="${run_name}_train"
+  generate_stage="${run_name}_generate"
+  generation_dir="${output_dir}/generation_full_context_test"
 
   echo "Starting transformer run ${run_index}/${total_runs}: ${run_name}"
   echo "  model:     ${model_cfg}"
@@ -133,21 +181,34 @@ for run_spec in "${RUNS[@]}"; do
   echo "  train cfg: ${TRAIN_CFG}"
   echo "  output:    ${output_dir}"
 
-  scripts/train_gpt2.sh \
-    "$TRAIN_LIST" \
-    "$VAL_LIST" \
-    "$TEST_LIST" \
-    "$model_cfg" \
-    "$TOKENIZER_CFG" \
-    "$TRAIN_CFG" \
-    "$output_dir"
+  if stage_enabled "$train_stage"; then
+    scripts/train_gpt2.sh \
+      "$TRAIN_LIST" \
+      "$VAL_LIST" \
+      "$TEST_LIST" \
+      "$model_cfg" \
+      "$TOKENIZER_CFG" \
+      "$TRAIN_CFG" \
+      "$output_dir"
+  else
+    echo "Skipping ${run_name} training because START_AT=${START_AT}."
+    if [[ ! -f "${output_dir}/config.json" ]]; then
+      echo "Expected trained checkpoint not found for skipped stage: ${output_dir}/config.json" >&2
+      exit 2
+    fi
+  fi
 
-  generation_dir="${output_dir}/generation_full_context_test"
-  generate_transformer_samples "$run_name" "$model_cfg" "$output_dir" "$generation_dir"
-  collect_generated_midis "$run_name" "$generation_dir"
+  if stage_enabled "$generate_stage"; then
+    generate_transformer_samples "$run_name" "$model_cfg" "$output_dir" "$generation_dir"
+    collect_generated_midis "$run_name" "$generation_dir"
+  else
+    echo "Skipping ${run_name} generation because START_AT=${START_AT}."
+    collect_generated_midis "$run_name" "$generation_dir"
+  fi
+
   SCORE_SPECS+=("${run_name} ${output_dir} ${generation_dir}")
 
-  if [[ "$run_index" -lt "$total_runs" ]]; then
+  if [[ "$run_index" -lt "$total_runs" && "${STAGE_ORDER[$generate_stage]}" -ge "$start_index" ]]; then
     between_runs
   fi
 done
