@@ -107,6 +107,17 @@ def build_token_dataset(tokenizer, chunk_paths: list[Path], max_seq_len: int) ->
     )
 
 
+def tokenize_midi_path(tokenizer, midi_path: Path) -> list[int]:
+    tokenized = tokenizer(midi_path)
+    if isinstance(tokenized, list):
+        return [
+            token_id
+            for sequence in tokenized
+            for token_id in sequence.ids
+        ]
+    return list(tokenized.ids)
+
+
 def select_eval_samples(
     data_list_path: Path,
     tokenizer,
@@ -119,19 +130,7 @@ def select_eval_samples(
     if str(eval_cfg.get("sample_mode", "chunks")) == "full_file_context":
         Random(int(eval_cfg.seed)).shuffle(midi_paths)
         selected_paths = midi_paths if num_samples <= 0 else midi_paths[:num_samples]
-        samples: list[tuple[Path, Path, list[int]]] = []
-        for midi_path in selected_paths:
-            tokenized = tokenizer(midi_path)
-            if isinstance(tokenized, list):
-                token_ids = [
-                    token_id
-                    for sequence in tokenized
-                    for token_id in sequence.ids
-                ]
-            else:
-                token_ids = tokenized.ids
-            samples.append((midi_path, midi_path, list(token_ids)))
-        return samples
+        return [(midi_path, midi_path, []) for midi_path in selected_paths]
 
     split_name = str(eval_cfg.get("split", "test"))
     chunk_paths = build_eval_chunks(tokenizer, midi_paths, tok_cfg, max_seq_len, split_name)
@@ -265,6 +264,27 @@ def save_json(path: Path, payload: Any) -> None:
         json.dump(payload, fh, indent=2, sort_keys=True)
 
 
+def load_completed_sample(sample_id: int, source_path: Path, out_dir: Path) -> dict[str, Any] | None:
+    sample_json_path = out_dir / "samples" / f"{sample_id:04d}" / "sample.json"
+    if not sample_json_path.is_file():
+        return None
+    try:
+        with sample_json_path.open("r", encoding="utf8") as fh:
+            record = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not record.get("decode_success"):
+        return None
+    generated_midi = record.get("generated_midi")
+    if not generated_midi or not Path(str(generated_midi)).is_file():
+        return None
+    if record.get("sample_id") != sample_id:
+        return None
+    if record.get("source_path") != str(source_path):
+        return None
+    return record
+
+
 def write_generation_sample(
     sample: GenerationSample,
     tokenizer,
@@ -380,6 +400,17 @@ def run_sample_generation(
 
     records: list[dict[str, Any]] = []
     for sample_id, (source_path, chunk_path, token_ids) in enumerate(samples):
+        completed_record = load_completed_sample(
+            sample_id=sample_id,
+            source_path=source_path,
+            out_dir=out_dir,
+        )
+        if completed_record is not None:
+            records.append(completed_record)
+            print(f"Skipping completed sample {sample_id:04d}: {source_path}", flush=True)
+            continue
+        if not token_ids and str(eval_cfg.get("sample_mode", "chunks")) == "full_file_context":
+            token_ids = tokenize_midi_path(tokenizer, source_path)
         if len(token_ids) < max(int(eval_cfg.min_prompt_tokens) + 1, 2):
             continue
         prompt_length = compute_prompt_length(token_ids, eval_cfg)
