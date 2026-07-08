@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tok_cfg", required=True, help="Tokenizer YAML config.")
     parser.add_argument("--data_list", required=True, help="Text file containing MIDI paths.")
     parser.add_argument("--eval_cfg", default="configs/eval/generation_shared.yaml")
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Override eval config device, e.g. cuda, cuda:0, cpu, or auto.",
+    )
     parser.add_argument("--out_dir", required=True)
     return parser.parse_args()
 
@@ -325,6 +330,8 @@ def run_sample_generation(
 ) -> None:
     args = parse_args() if args is None else args
     eval_cfg = load_eval_config(args.eval_cfg)
+    if args.device is not None:
+        eval_cfg.device = args.device
     seed = int(eval_cfg.get("seed", 42))
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -346,6 +353,13 @@ def run_sample_generation(
 
     tokenizer = MidiTokBuilder.from_yaml(args.tok_cfg).to_MidiTok()
     device = resolve_device(eval_cfg)
+    print(
+        "Generation device: "
+        f"{device} "
+        f"(torch.cuda.is_available={torch.cuda.is_available()}, "
+        f"torch.cuda.device_count={torch.cuda.device_count()})",
+        flush=True,
+    )
     checkpoint_path = Path(args.checkpoint)
     model_cfg_path = Path(args.model_cfg)
     adapter = adapter_factory(
