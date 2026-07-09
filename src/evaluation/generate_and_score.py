@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -290,7 +291,9 @@ def write_generation_sample(
     tokenizer,
     out_dir: Path,
     eval_cfg: DictConfig,
+    generation_seconds: float | None = None,
 ) -> dict[str, Any]:
+    decode_start_time = time.perf_counter()
     output_cfg = eval_cfg.get("output", {})
     copy_reference_midi = bool(output_cfg.get("copy_reference_midi", True))
     write_prompt_midi = bool(output_cfg.get("write_prompt_midi", True))
@@ -309,6 +312,9 @@ def write_generation_sample(
         "repetition_4gram": compute_repetition_4gram(sample.generated_ids[sample.prompt_length :]),
         "decode_success": False,
     }
+    if generation_seconds is not None:
+        result["generation_seconds"] = generation_seconds
+        result["tokens_per_second"] = sample.generated_length / max(generation_seconds, 1e-12)
     try:
         if write_prompt_midi:
             decode_ids_to_midi(tokenizer, sample.prompt_ids, prompt_path)
@@ -327,6 +333,10 @@ def write_generation_sample(
         )
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    decode_seconds = time.perf_counter() - decode_start_time
+    result["decode_seconds"] = decode_seconds
+    if generation_seconds is not None:
+        result["total_sample_seconds"] = generation_seconds + decode_seconds
     save_json(
         sample_dir / "sample.json",
         {
@@ -426,6 +436,7 @@ def run_sample_generation(
             generation_eos_token_id = eos_token_id
         prompt_ids = token_ids[:prompt_length]
         reference_full_ids = token_ids[: prompt_length + generation_limit]
+        generation_start_time = time.perf_counter()
         continuation_ids = generate_continuation(
             adapter=adapter,
             prompt_ids=prompt_ids,
@@ -433,6 +444,7 @@ def run_sample_generation(
             cfg=eval_cfg,
             eos_token_id=generation_eos_token_id,
         )
+        generation_seconds = time.perf_counter() - generation_start_time
         generated_full_ids = prompt_ids + continuation_ids
         sample = GenerationSample(
             sample_id=sample_id,
@@ -451,17 +463,35 @@ def run_sample_generation(
                 tokenizer=tokenizer,
                 out_dir=out_dir,
                 eval_cfg=eval_cfg,
+                generation_seconds=generation_seconds,
             )
         )
 
+    timed_records = [
+        record
+        for record in records
+        if isinstance(record.get("generation_seconds"), (int, float))
+    ]
+    generated_tokens_timed = sum(int(record.get("generated_length", 0)) for record in timed_records)
+    total_generation_seconds = sum(float(record["generation_seconds"]) for record in timed_records)
+    total_decode_seconds = sum(
+        float(record.get("decode_seconds", 0.0))
+        for record in records
+        if isinstance(record.get("decode_seconds"), (int, float))
+    )
     summary = {
         "model_type": model_type,
         "checkpoint": str(checkpoint_path),
         "num_samples": len(records),
         "decode_success_count": sum(1 for record in records if record.get("decode_success")),
         "decode_failure_count": sum(1 for record in records if not record.get("decode_success")),
+        "timed_sample_count": len(timed_records),
+        "total_generation_seconds": total_generation_seconds,
+        "total_decode_seconds": total_decode_seconds,
+        "generated_tokens_timed": generated_tokens_timed,
     }
     summary["decode_success_rate"] = summary["decode_success_count"] / max(len(records), 1)
+    summary["tokens_per_second"] = generated_tokens_timed / max(total_generation_seconds, 1e-12)
     save_json(out_dir / "generation_summary.json", summary)
     save_json(out_dir / "generation_samples.json", records)
 
