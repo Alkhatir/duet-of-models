@@ -1,0 +1,10 @@
+onset_tolerance_sec: 0.03
+include_drums: false
+chroma_fs: 2
+transpose_invariant: true
+muspy_measure_resolution: null
+fmd:
+  enabled: false
+  required: false
+roundtrip:
+  enabled: false
