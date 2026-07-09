@@ -16,14 +16,16 @@
 \usepackage{xcolor}
 \usepackage[linesnumbered,ruled,vlined]{algorithm2e}
 
-\title{xLSTM-Based Symbolic Music Generation: Practical Work Report}
+\title{Comparative Symbolic Music Generation with xLSTM and Transformer Language Models}
 
 \author{%
   Peer (Pierre) Hanna \\
-  Practical Work Report\\
+  Bachelor Thesis\\
   \texttt{peerhanna501@gmail.com} \\ 
   Institute of Computational Perception \\
-  Johannes Kepler University Linz
+  Johannes Kepler University Linz \\
+  \texttt{Supervisor}: Prof. Gerhard Widmer\\ 
+  \texttt{Co-Supervisor}: PhD. Emmanouil Karystinaios
 }
 
 \begin{document}
@@ -31,12 +33,30 @@
 \maketitle
 
 \begin{abstract}
-	This report documents the implementation of an xLSTM-based pipeline for symbolic music generation. The project uses MIDI files from the matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag annotations, and constructs deterministic train/validation/test splits with explicit controls against metadata and content leakage. Music is represented as discrete event sequences using a MidiTok REMI configuration with REMI+-style extensions in the active experimental tokenizer, and xLSTM language models are trained autoregressively on fixed-length token chunks. The practical contribution of the project is a reproducible workflow covering dataset construction, preprocessing, tokenization, xLSTM training, hyperparameter exploration and model selection.
+	This thesis investigates symbolic music generation as an autoregressive
+	sequence-modelling problem over MIDI-derived event tokens. Starting from the
+	matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag
+	annotations, the project builds deterministic train, validation, and test
+	splits with explicit controls against metadata and content leakage. Music is
+	represented using a MidiTok REMI configuration with REMI+-style extensions,
+	allowing MIDI files to be converted into discrete token sequences suitable
+	for neural language modelling.
+
+	The work first develops and tunes an xLSTM-based generation pipeline, covering
+	preprocessing, tokenization, training, validation logging, checkpoint
+	selection, and generated-MIDI evaluation. The best derived xLSTM setup is then
+	used as the basis for a broader comparison with Transformer-based language
+	models, including GPT-2-style and LLaMA-style architectures trained under
+	matched data, tokenization, context-length, and evaluation conditions. In
+	addition to quantitative comparison across validation and test metrics, the
+	project develops a Gradio application for interactive music generation from
+	the trained models. The main contribution is a reproducible experimental
+	framework for comparing recurrent and Transformer sequence models for
+	symbolic music generation, together with a practical interface for exploring
+	their generated outputs.
 \end{abstract}
 
 \input{sections/introduction}
-
-\input{sections/project_scope_and_practical_objectives}
 
 \input{sections/dataset}
 
