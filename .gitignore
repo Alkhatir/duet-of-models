@@ -223,7 +223,13 @@ LMD_CLEAN/
 *cache.jsonl
 # Check point folders and files
 step-*/
+checkpoint-*/
 best/
 checkpoint.pt
+*.safetensors
+*.bin
 /docs/pr_work_report/figures/wandb_exports
 /experiments/gradio_xlstm_generations
+generated_midis/
+fmd_inputs/
+samples/
