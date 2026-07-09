@@ -1,0 +1,40 @@
+seed: 42
+wandb_project: duet-of-models
+train:
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 16
+  learning_rate: 0.0003
+  lr_schedule:
+  - type: linear
+    end_step: 200
+    start_lr: 3.0e-05
+    end_lr: 0.0003
+  - type: cosine
+    end_step: 8000
+    start_lr: 0.0003
+    end_lr: 3.0e-05
+  - type: constant
+    end_step: null
+    lr: 3.0e-05
+  num_train_epochs: 8
+  eval_strategy: steps
+  eval_steps: 1000
+  save_strategy: steps
+  save_steps: 1000
+  logging_steps: 50
+  max_grad_norm: 0.0
+  report_to:
+  - wandb
+data:
+  block_size: 1024
+output_dir: experiments/transformer-tok14-batch16-sched-decay8000/gpt2
+run_name: tok_14_batch_16_gpt2
+model:
+  architecture: gpt2
+  vocab_size: 646
+  hidden_size: 256
+  num_hidden_layers: 4
+  num_attention_heads: 8
+  max_position_embeddings: 1024
+  pad_token_id: 0
+  eos_token_id: 2
