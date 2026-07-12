@@ -6,13 +6,11 @@ Training is formulated as autoregressive next-token prediction over symbolic mus
 
 The trainer does not discover data by recursively scanning the corpus at training time. Instead, it reads explicit split-list files produced by the dataset construction pipeline. Each list contains MIDI paths for one split, and the loader checks that every referenced file exists. Relative paths are resolved from the location of the list file, which keeps train/validation/test membership fixed and makes a run reproducible from the saved split manifests.
 
-The active tokenizer configuration is loaded with \verb|MidiTokBuilder| and is used before model construction. This lets the training code set two runtime model values directly from the data setup: \verb|vocab_size| comes from the tokenizer vocabulary, and \verb|context_length| comes from the configured block size. The MIDI files in the train and validation lists are then split into fixed-length token chunks with \verb|miditok.utils.split_files_for_training|. Chunk files are written to a hash-based cache under \verb|cache_chunks/|, so repeated runs with the same split and block size can reuse the same chunked representation.
+The active tokenizer configuration is loaded with \verb|MidiTokBuilder| and is used before model construction. This lets the training code set runtime model values directly from the data setup: \verb|vocab_size| comes from the tokenizer vocabulary, while the configured block size is used as the xLSTM \verb|context_length| and the Transformer \verb|max_position_embeddings|. The MIDI files in the train and validation lists are then split into fixed-length token chunks with \verb|miditok.utils.split_files_for_training|. Chunk files are written to a hash-based cache under \verb|cache_chunks/|, so repeated runs with the same split and block size can reuse the same chunked representation.
 
-After chunking, the code wraps the chunk files in MidiTok's \verb|DatasetMIDI| and creates PyTorch dataloaders \citep{paszkeAutomaticDifferentiationPyTorch2017}. Training batches are shuffled, while validation batches keep a deterministic order. The \verb|DataCollator| pads variable-length examples, copies the input IDs as labels, and shifts the labels so that each position predicts the following token. Padding labels are ignored with index \verb|-100| in the cross-entropy loss, so metric and loss values are computed only on real musical tokens.
+After chunking, the code wraps the chunk files in MidiTok's \verb|DatasetMIDI| and creates PyTorch dataloaders \citep{paszkeAutomaticDifferentiationPyTorch2017}. Training batches are shuffled, while validation batches keep a deterministic order. The xLSTM trainer uses a \verb|DataCollator| that copies input IDs as labels and shifts the labels before computing loss. The Transformer trainer also copies input IDs as labels, but leaves them unshifted because Hugging Face causal language models perform the causal shift internally. In both paths, padding labels are ignored with index \verb|-100|, so metric and loss values are computed only on real musical tokens.
 
-The current block size is 1024 tokens. With tokenizer 11 and batch size 8, the training code reports 4,235 batches per epoch and 12,705 total training steps for three epochs, which gives a concrete scale for the completed tokenizer-11 experiments.
-
-\subsection{Optimization, Scheduling, and Logging}
+\subsection{xLSTM Training}
 
 Training runs are launched through a shell wrapper that fixes the Python environment and forwards the experiment inputs to the xLSTM training module:
 \begin{verbatim}
@@ -32,15 +30,86 @@ The wrapper executes \verb|python -m src.models.xlstm.train| inside the \verb|en
 
 Inside the training module, the model and training YAML files are merged into one resolved configuration, and \verb|output_dir| is also used as the run name. The tokenizer is loaded first so that the model vocabulary size can be derived from the active tokenizer configuration. The trainer then builds the split-specific dataloaders, constructs the xLSTM model, and trains it with AdamW \citep{loshchilovDecoupledWeightDecay2019} using the model's weight-decay parameter grouping.
 
-Optimization behavior is controlled by the training YAML rather than by hard-coded command-line flags. These configs specify parameters such as random seed, train and validation batch sizes, number of epochs, base learning rate, optional gradient clipping, evaluation interval, checkpoint interval, logging interval, device, and numeric precision. Learning-rate schedules can be expressed either with the older warmup/cosine fields or with explicit multi-phase schedules. The newer schedule configs use phases such as linear warmup, cosine decay, and constant learning-rate tails, which makes LR sweep experiments easier to compare and reproduce.
+Optimization behavior is controlled by the training YAML rather than by hard-coded command-line flags. These configs specify parameters such as random seed, train and validation batch sizes, number of epochs, base learning rate, optional gradient clipping, validation interval, checkpoint interval, logging interval, device, and numeric precision. Learning-rate behavior is therefore part of the saved training configuration rather than hidden inside the training loop.
 
-During training, the loop logs average training loss, perplexity, learning rate, valid-token count, and progress at the configured logging interval. At each evaluation interval it computes validation loss, perplexity, token accuracy, top-5 token accuracy, mean token confidence, and valid-token count. If W\&B \citep{wandb} reporting is enabled in the selected training config, these values are logged to the configured W\&B project together with run metadata such as the split files, tokenizer config, output directory, model parameter count, batch sizes, block size, and total number of training steps. Checkpoints are written under the run directory at the configured save interval, and the best validation-loss checkpoint is stored separately under \verb|best/checkpoint.pt|.
+During training, the loop logs average training loss, perplexity, learning rate, valid-token count, and progress at the configured logging interval. At each validation interval it computes validation loss, perplexity, token accuracy, top-5 token accuracy, mean token confidence, and valid-token count. If W\&B \citep{wandb} reporting is enabled in the selected training config, these values are logged to the configured W\&B project together with run metadata such as the split files, tokenizer config, output directory, model parameter count, batch sizes, block size, and total number of training steps. Checkpoints are written under the run directory at the configured save interval, and the best validation-loss checkpoint is stored separately under \verb|best/checkpoint.pt|.
+
+\subsection{Transformer Training}
+
+Transformer runs use a separate wrapper and Python entry point from the xLSTM
+runs because they depend on the Hugging Face training stack. The shell wrapper
+has the following interface:
+\begin{verbatim}
+scripts/train_gpt2.sh <train_list> <val_list> <test_list> \
+  <model_cfg> <tokenizer_cfg> <train_cfg> <output_dir>
+\end{verbatim}
+Despite the wrapper name, this path is not restricted to GPT-2. The wrapper
+executes \verb|python -m src.models.Transformer.train| inside the
+\verb|envs/gpt2| \verb|uv| environment, and the selected model YAML determines
+which Transformer architecture is instantiated. If \verb|architecture| is set to
+\verb|gpt2|, the training code builds a \verb|GPT2Config|. If it is set to
+\verb|llama|, it builds a \verb|LlamaConfig|. In both cases, the resulting model
+is created from configuration rather than loaded from pretrained weights.
+
+The Transformer training module follows the same high-level configuration
+pattern as the xLSTM trainer. It loads the model YAML and training YAML, merges
+them into one resolved configuration, applies the selected output directory, and
+writes the resolved configuration to \verb|config.resolved.yaml| in the run
+directory. The tokenizer is loaded before model construction, so the model
+vocabulary size is always derived from the active tokenizer rather than copied
+manually into each experiment. The configured block size is also copied into the
+model configuration as \verb|max_position_embeddings|, keeping the data context
+length and model context length aligned.
+
+Dataset construction is handled inside the Transformer trainer. The train,
+validation, and optional test lists are read from explicit split manifests, each
+MIDI file is tokenized and split into fixed-length chunks, and the chunks are
+wrapped with MidiTok's \verb|DatasetMIDI|. The Transformer data collator pads
+examples and copies input IDs as labels, but does not pre-shift the labels.
+This is intentional because Hugging Face causal language models perform the
+next-token shift internally when computing the language-modeling loss.
+
+Optimization uses Hugging Face \verb|TrainingArguments| and \verb|Trainer| for
+the training loop, but the repository still controls the optimizer and learning
+rate schedule explicitly. The trainer builds AdamW parameter groups so that
+weight-decay and no-decay parameters can be handled separately, then passes the
+custom optimizer and scheduler into the \verb|Trainer|. Training YAML files
+control batch sizes, epoch count, logging interval, checkpoint interval,
+validation interval, reporting backend, gradient clipping, and optional
+multi-phase learning-rate schedules.
+
+The repository uses a small custom \verb|Trainer| subclass to make Transformer
+logging comparable with the xLSTM logs. During training and validation it tracks
+language-model loss and perplexity together with token-level diagnostics such as
+token accuracy, top-5 token accuracy, mean token confidence, and the number of
+valid non-padding tokens. Metric computation uses a compact preprocessing step
+that keeps only the top predictions and confidence values needed for these
+statistics, instead of retaining the full logits tensor for every token.
+
+Checkpointing follows the Hugging Face convention. Periodic checkpoint
+directories are written under the selected output directory according to the
+save interval in the training configuration. When periodic validation is
+enabled, the training arguments request \verb|load_best_model_at_end| with
+\verb|eval_loss| as the selection metric and lower values treated as better.
+After training finishes, \verb|trainer.save_model(output_dir)| writes the final
+selected model files directly into the run directory. The module also writes a
+\verb|metrics.json| file containing scalar training and validation metrics.
+
+W\&B logging is controlled by the selected training YAML. If \verb|wandb| is
+included in the \verb|report_to| setting, the Transformer trainer starts a W\&B
+run using the configured project name and stores the resolved configuration as
+run metadata. The logged metadata includes the split-list paths, tokenizer
+configuration path, model and training settings, output directory, and final
+metrics path. If W\&B reporting is disabled, the same local artifacts are still
+written to disk, so runs remain reproducible without online logging.
 
 \subsection{Rented-GPU Training on Vast.ai}
 
-Because the xLSTM experiments require CUDA-capable hardware for practical turnaround time, the repository also contains a small Vast.ai deployment workflow. The goal of this workflow is to make rented-GPU training runs repeatable instead of relying on manual instance setup.
+Because the model training experiments require CUDA-capable hardware for practical turnaround time, the repository also contains a small Vast.ai deployment workflow. The goal of this workflow is to make rented-GPU training runs repeatable instead of relying on manual instance setup.
 
-The container image used for these runs is \verb|alkhatir/duet-of-models:cuda12.1-xlstm-vast|. It is built from \verb|DOCKERFILE_XLSTM|, which starts from the CUDA 12.1 development image, installs the build tools needed by the xLSTM environment, installs \verb|uv|, and adds utility tools such as \verb|gdown| and the Vast.ai CLI. The image also copies the repository startup script to \verb|/entry.sh| so that the same initialization logic can run automatically when a rented instance starts.
+For the xLSTM runs, the custom container image is \path{alkhatir/duet-of-models:cuda12.1-xlstm-vast}\footnote{\url{https://hub.docker.com/r/alkhatir/duet-of-models}}. It is built from \verb|DOCKERFILE_XLSTM|, which starts from the CUDA 12.1 development image, installs the build tools needed by the xLSTM environment, installs \verb|uv|, and adds utility tools such as \verb|gdown| and the Vast.ai CLI. The image also copies the repository startup script to \verb|/entry.sh| so that the same initialization logic can run automatically when a rented instance starts.
+
+For the Transformer training pipeline, the runs used the public Vast.ai image \verb|vastai/pytorch|\footnote{\url{https://hub.docker.com/r/vastai/pytorch/}} rather than a new custom image or the xLSTM-specific image. This image is provided under the Vast.ai Docker Hub namespace and is described as being built on the Vast base image. It was a convenient choice for the Transformer experiments because it already matched the Vast.ai instance workflow and provided a PyTorch-oriented environment suitable for installing and running the Hugging Face Transformer dependencies.
 
 Instance creation is handled by the root-level script \verb|vastai_instance_create.sh|. The script searches Vast.ai offers for supported NVIDIA GPUs with at least 12 GB of GPU memory, enough disk space, CUDA 12.1 compatibility, and a reliability threshold. It then creates an SSH-enabled instance using the configured Docker image and starts the container with:
 \begin{verbatim}
@@ -50,4 +119,4 @@ The script exposes the most important parameters through environment variables, 
 
 The entry script, \verb|entry.sh|, performs the actual machine initialization inside the container. It creates the workspace directory, clones or updates the Git repository, downloads the prepared data archive with \verb|gdown|, extracts it into the repository workspace, and synchronizes the xLSTM \verb|uv| environment. If \verb|RUN_AFTER_SETUP| is set, the script changes into the repository and launches that command, which allows a full training job to begin automatically after the instance is provisioned. Otherwise, the script keeps the container alive for SSH access, which is useful for interactive debugging or manually starting a training command.
 
-In practice, this separates the rented-machine workflow into two reproducible layers: the Docker image fixes the CUDA and Python tooling environment, while \verb|vastai_instance_create.sh| and \verb|entry.sh| fix the instance selection and startup procedure. This reduces the amount of hand configuration needed before each training run and makes it easier to rerun experiments on different rented GPUs with the same repository state and data archive.
+In practice, this separates the rented-machine workflow into two reproducible layers: the selected Docker image fixes the CUDA and Python tooling environment, while \verb|vastai_instance_create.sh| and \verb|entry.sh| fix the instance selection and startup procedure. This reduces the amount of hand configuration needed before each training run and makes it easier to rerun experiments on different rented GPUs with the same repository state and data archive.
