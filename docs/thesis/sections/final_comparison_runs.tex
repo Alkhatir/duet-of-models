@@ -1,0 +1,227 @@
+\section{Matched Comparison Runs}
+
+After the xLSTM model-selection stage, the final controlled comparison used two
+experiment launchers: \path{experiments/run_xlstm_tok14_batch16_sched_decay8000.sh}
+for the selected xLSTM setup and
+\path{experiments/run_transformer_tok14_gpt2_llama.sh} for the GPT-2-style and
+LLaMA-style Transformer baselines. The corresponding run folders are
+\path{experiments/xlstm-tok14-batch16-sched-decay8000} and
+\path{experiments/transformer-tok14-batch16-sched-decay8000}. All three models
+use the same train, validation, and test split files, tokenizer 14, a context
+length of 1024 tokens, batch size 16, eight training epochs, and the same
+learning-rate schedule from
+\path{configs/train/transformer_tok14_batch16_sched_decay8000.yaml}. This gives
+19,432 optimizer updates for each model.
+
+The W\&B runs used for the plots are \verb|xlstm-tok14-batch16-sched-decay8000|
+, \verb|tok_14_batch_16_gpt2| , and
+\verb|tok_14_batch_16_llama| , all under the
+\verb|duet-of-models| project. One logging detail matters for interpreting the
+curves: the xLSTM trainer logs with the optimizer step as the W\&B step, whereas
+the Transformer runs are logged through the Hugging Face trainer history, where
+the W\&B row index is not the optimizer step. For the Transformer plots, the
+optimizer step is therefore taken from the logged \verb|train/global_step|
+field.
+
+\subsection{Training and Test Metrics}
+
+Figure~\ref{fig:matched-training-curves} compares training and validation
+behavior for the three matched runs. All models improve rapidly during the first
+few thousand updates, but the validation curves separate clearly. The xLSTM run
+reaches the lowest validation loss at step 4000 and then remains relatively
+stable. The GPT-2-style Transformer improves more slowly and reaches its best
+validation loss at step 8000. The LLaMA-style Transformer reaches its best
+validation loss at step 4000, after which its training loss continues to fall
+while validation loss rises. This indicates stronger fitting capacity, but also
+more overfitting under the fixed comparison schedule.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\textwidth]{figures/matched_training_curves.png}
+	\caption{Training and validation loss, token accuracy, and top-5 token accuracy for the matched xLSTM, GPT-2-style, and LLaMA-style runs. The top row shows training metrics and the bottom row shows validation metrics, all plotted against optimizer step.}
+	\label{fig:matched-training-curves}
+\end{figure}
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=0.82\textwidth]{figures/matched_validation_loss.png}
+	\caption{Validation-loss trajectories and selected checkpoints for the matched runs. The selected checkpoints are step 4000 for xLSTM, step 8000 for GPT-2-style Transformer, and step 4000 for LLaMA-style Transformer.}
+	\label{fig:matched-validation-loss}
+\end{figure}
+
+Table~\ref{tab:matched-test-metrics} reports the held-out next-token metrics.
+The xLSTM checkpoint is strongest across all reported test metrics: its test
+loss is 1.3495, compared with 1.8555 for the LLaMA-style Transformer and 1.9657
+for the GPT-2-style Transformer. The same ordering appears in perplexity and
+token accuracy. The LLaMA-style model is the stronger Transformer baseline,
+especially in token accuracy, but it does not close the gap to xLSTM under this
+training setup. GPT-2 has similar top-5 accuracy to LLaMA, but its top-1
+accuracy is substantially lower, meaning that it often places the reference
+token among plausible alternatives without ranking it first.
+
+\begin{table}[htbp]
+	\centering
+	\scriptsize
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrrrrl}
+			\toprule
+			Model                   & Best step & Val. loss       & Test loss       & Test ppl.       & Test acc.       & Selected checkpoint          \\
+			\midrule
+			xLSTM                   & 4000      & \textbf{1.4456} & \textbf{1.3495} & \textbf{3.8554} & \textbf{0.6148} & \path{best/checkpoint.pt}    \\
+			LLaMA-style Transformer & 4000      & 1.8828          & 1.8555          & 6.3948          & 0.5150          & \path{llama/checkpoint-4000} \\
+			GPT-2-style Transformer & 8000      & 2.0205          & 1.9657          & 7.1399          & 0.4306          & \path{gpt2/checkpoint-8000}  \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Held-out next-token metrics for the matched comparison runs. Lower loss and perplexity are better; higher token accuracy is better.}
+	\label{tab:matched-test-metrics}
+\end{table}
+
+These results make the next-token comparison unambiguous. Under the matched
+tokenization, context length, batch size, and training budget, xLSTM is the best
+language model on the held-out test split. LLaMA is the better Transformer
+baseline, but its validation curve suggests that the fixed schedule is not
+optimal for it: by the end of training it has very low training loss but worse
+validation loss than at the selected checkpoint. GPT-2 is more stable than
+LLaMA, but plateaus at a higher validation and test loss.
+
+\subsection{Generation Metrics}
+
+The generation comparison uses the selected validation checkpoint from each run.
+For the Transformer runs, Hugging Face Trainer reloads the best validation
+checkpoint at the end of training and \path{trainer.save_model} writes that
+model to the saved run root used by the generation launcher. The recorded best
+checkpoints are \path{checkpoint-8000} for GPT-2-style Transformer and
+\path{checkpoint-4000} for LLaMA-style Transformer. The xLSTM launcher uses the
+explicit \path{best/checkpoint.pt} artifact. In all cases, generation uses the
+shared evaluation configuration
+\path{configs/eval/transformer_full_context_test.yaml}. The test split is
+sampled in \verb|full_file_context| mode, the prompt is the maximum available
+context up to 1024 tokens, and the continuation length is set to the remaining
+reference length. Because \verb|generation_length| is set to \verb|reference|,
+the configured \verb|max_generation_tokens| cap is not applied in these runs.
+Sampling is stochastic with temperature 1.0, top-\(k=50\), and top-\(p=0.95\).
+
+Generation time differs substantially between the models. Since the Transformer
+runs did not store per-sample timing fields, their generation duration is
+estimated from the modification-time span of the generated MIDI files. The same
+timestamp estimate is reported for xLSTM, but the xLSTM run also contains
+explicit timing telemetry for the resumed timed portion of generation. All three
+models generated the same total continuation length, 3,798,456 tokens, so the
+timestamp spans give a useful approximate throughput comparison.
+
+\begin{table}[htbp]
+	\centering
+	\small
+	\begin{tabular}{lrrl}
+		\toprule
+		Model                   & File span (h) & Approx. tokens/s & Explicit timing log      \\
+		\midrule
+		GPT-2-style Transformer & 5.50          & 191.9            & --                       \\
+		LLaMA-style Transformer & 8.78          & 120.2            & --                       \\
+		xLSTM                   & 44.81         & 23.5             & 36.20 h at 23.3 tokens/s \\
+		\bottomrule
+	\end{tabular}
+	\caption{Approximate generation duration for the 200 generated MIDI files. File span is the time between the earliest and latest generated-MIDI modification timestamps in each collected output folder. The xLSTM run additionally logged explicit timing for 166 resumed samples.}
+	\label{tab:matched-generation-timing}
+\end{table}
+
+The much longer xLSTM generation time is consistent with the cost of its
+recurrent xLSTM blocks, especially the sLSTM blocks, during token-by-token
+autoregressive decoding. However, this should be interpreted as a practical
+runtime observation rather than a controlled architecture benchmark: the
+timestamp spans also include implementation details, possible resume overhead,
+I/O, and hardware/runtime differences between the runs.
+
+Each model generated 200 continuations, and all generated outputs decoded and
+scored successfully. The scoring pipeline compares the generated MIDI files
+against their reference MIDI files with MusPy descriptors
+\citep{dongMusPyToolkitSymbolic2020} and computes Frechet Music Distance (FMD)
+\citep{retkowskiFrechetMusicDistance2025} over the generated and reference MIDI
+sets. The FMD values are very close: GPT-2 has the lowest value at 201.91,
+xLSTM follows at 202.54, and LLaMA has 205.64. Since all three values are within
+a narrow range, the FMD result does not mirror the next-token ranking and should
+be interpreted together with descriptor-level differences.
+
+Figure~\ref{fig:matched-generation-metric-distributions} compares the generation
+metrics with per-sample distributions for the MusPy descriptor differences.
+FMD is shown as a separate set-level value because it is computed over the full
+generated and reference MIDI collections rather than per individual sample.
+The distributions show that the aggregate differences are not driven by a single
+sample: GPT-2 has a wider upper tail for pitch-entropy and empty-beat-rate
+differences, LLaMA has the highest median polyphony-rate difference, and xLSTM
+keeps the lowest median empty-beat-rate and polyphony-rate differences while
+having a higher pitch-range median.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\textwidth]{figures/matched_generation_metric_distributions.png}
+	\caption{Distribution of the generation metrics for the matched runs. Violins show per-sample MusPy absolute differences, white boxes show the interquartile range and median, and the first panel shows FMD as a corpus-level metric. Lower values are better.}
+	\label{fig:matched-generation-metric-distributions}
+\end{figure}
+
+\begin{table}[htbp]
+	\centering
+	\scriptsize
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrrrrrr}
+			\toprule
+			Model                   & Decode & Score & FMD             & Pitch ent. diff & Pitch range diff & Polyphony-rate diff & Empty-beat diff \\
+			\midrule
+			GPT-2-style Transformer & 1.00   & 1.00  & \textbf{201.91} & 1.2385          & \textbf{10.7350} & 0.3398              & 0.1313          \\
+			LLaMA-style Transformer & 1.00   & 1.00  & 205.64          & \textbf{0.5764} & 11.3250          & 0.4027              & 0.0652          \\
+			xLSTM                   & 1.00   & 1.00  & 202.54          & 0.6746          & 14.0800          & \textbf{0.2723}     & \textbf{0.0259} \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Generated-MIDI scoring summary. Decode and score columns are success rates. The remaining columns compare generated and reference MIDI sets, where lower is better.}
+	\label{tab:matched-generation-metrics}
+\end{table}
+
+The generation metrics are more mixed than the next-token metrics. xLSTM has the
+best rhythmic sparsity and polyphony-rate agreement among the three models: its
+empty-beat-rate difference is 0.0259, compared with 0.0652 for LLaMA and 0.1313
+for GPT-2, and its polyphony-rate difference is also the lowest. This suggests
+that the xLSTM generations preserve some temporal density properties of the
+reference set better than the Transformer baselines. However, xLSTM also has the
+largest pitch-range and number-of-pitches differences, indicating that it tends
+to cover a wider pitch space than the references.
+
+The LLaMA-style Transformer gives the best pitch-distribution match among the
+three models. It has the lowest pitch-entropy and pitch-class-entropy
+differences, which means that its generated pitch usage is closer to the
+reference distribution even though its FMD score is slightly worse and its
+polyphony-rate difference is the highest. GPT-2 has the lowest FMD and the
+smallest pitch-range difference, but it also has the largest pitch-entropy,
+pitch-class-entropy, and empty-beat-rate differences. Therefore, its low FMD
+should not be read as a complete win on generation quality; it is better on some
+aggregate embedding statistics but weaker on several interpretable symbolic
+descriptors.
+
+Taken together, the two comparison stages lead to different conclusions. For
+next-token language modelling, xLSTM is clearly the strongest model in this
+matched setup. For generated MIDI, xLSTM remains competitive and is strongest on
+rhythmic density and polyphony-rate agreement, while LLaMA is strongest on pitch
+entropy and GPT-2 obtains the lowest FMD. The final model choice therefore
+depends on the desired priority: choose xLSTM for the best held-out language
+model and strong rhythmic agreement, choose LLaMA when pitch-distribution
+similarity is the main criterion, and treat GPT-2's FMD result as useful but not
+sufficient on its own because its descriptor-level deviations are larger.
+
+\subsubsection{Hearing-Test Audio Renders}
+
+For manual hearing checks, the generated MIDI folders\footnote{The generated MIDIs along with their WAVs can be found here \url{https://drive.google.com/drive/folders/1XJcGQ6y9gM19ZxW41jJVKB6jiRdwJzJ7?usp=sharing}} were partially rendered to
+WAV with FluidSynth using the FluidR3 GM soundfont at 44.1 kHz. The renders were
+stored next to the corresponding MIDI files with matching basenames. This
+conversion was a practical preparation step for listening rather than a formal
+blind listening study. It also exposed an important difference between the
+models: many generated files were expensive to synthesize as uncapped WAV audio.
+With a 60-second per-file render guard, GPT-2 completed 148 of 200 files, LLaMA
+completed 105 of 200 files, and xLSTM completed 88 of 200 files. GPT-2 had the
+highest completion count, but also the largest disk footprint: its completed WAV
+payload occupied about 17 GB, with several files near or above 1 GB and one
+timed-out retry expanding to 7.6 GB. LLaMA and xLSTM produced smaller completed
+WAV sets, about 4.3 GB and 2.8 GB respectively, but both still left many files
+unrendered under the timeout. For this reason, the hearing-test material should
+be treated as a partial audio subset; rendering all 200 samples per model would
+need duration caps or a compressed audio target.
