@@ -1,57 +1,68 @@
 \section{Limitations}
 
-The current practical work has several limitations. Some are limitations of the
-present experimental state, while others are broader limitations of the data and
-evaluation setup used for symbolic music generation:
+The thesis uses a controlled experimental setup, but the conclusions are still
+bounded by the dataset, model search, and evaluation design. The most important
+limitations are:
 \begin{itemize}
-	\item the active experiments use a 2,000-file subset rather than the full available corpus;
-	\item genre labels are multi-label and LastFM-derived, so they are noisy descriptive tags rather than clean class labels;
-	\item deduplication signatures reduce but may not eliminate all musical duplicates or near-duplicates;
-	\item current reported metrics are validation token metrics, not final held-out generation results;
-	\item REMI+ choices were tuned on a small sampled run and may need revisiting for final-scale training;
-	\item no human evaluation protocol is currently defined;
-	\item the current model comparisons are not yet matched against the Transformer baseline under the same split, tokenizer, compute budget, and evaluation protocol;
-	\item the medium xLSTM follow-up combines a larger model, longer training, and a restart schedule in one experiment, so its overfitting behavior cannot isolate which factor caused the degradation;
-	\item the training context length is fixed at 1024 tokens, which may truncate or fragment longer musical structure such as repeated sections, transitions, and form-level dependencies;
-	\item the current models are unconditional next-token models and do not yet use the available genre, instrument, or metadata tags as conditioning signals;
-	\item the tokenizer and evaluation code depend on MIDI parsing and decoding behavior, so failures or artifacts in corrupted, unusual, or very dense MIDI files can affect both training data and generated-output metrics;
-	\item the current generation-quality criteria do not yet include systematic checks for listening-level properties such as phrasing, long-range repetition, harmonic direction, or arrangement coherence.
+	\item the experiments use a 2,000-file subset rather than the full available corpus;
+	\item training files were sampled at the MIDI-file level rather than selecting one MIDI representation per unique music IDs, which can reduce musical diversity when several MIDI versions represent the same song;
+	\item the Transformer models are matched baselines, not independently optimized architectures;
+	\item the xLSTM hyperparameter search is broader than the Transformer search, so the comparison is controlled but not equally tuned for all model families;
+	\item the medium xLSTM follow-up changes capacity, training length, and schedule together, so its overfitting behavior does not isolate one cause;
+	\item the context length is fixed at 1024 tokens, which can be too short for dense or complex musical passages where one pattern already occupies a large part of the available window;
+	\item the generation protocol uses one shared stochastic sampling setup rather than a separate sampling search per model;
+	\item automatic metrics do not fully measure listening-level properties such as phrasing, repetition, harmonic direction, or long-range coherence;
+	\item the hearing-test material is partial and informal, not a blind listening study;
+	\item generation-time measurements are practical run observations, not controlled hardware benchmarks;
+	\item the Gradio applications support qualitative inspection but do not by themselves provide user-study evidence.
 \end{itemize}
 
-The strongest methodological limitation is that validation loss is only a proxy
-for musical usefulness \citep{dongMuseGANMultitrackSequential2017,ensMMMExploringConditional2020}. A model can assign high probability to the next reference
-token while still producing samples that repeat short patterns, decode into
-awkward timing, overuse frequent instruments, or fail to develop convincing
-musical structure. Conversely, a model with slightly worse validation loss could
-produce more acceptable continuations under a particular sampling strategy. For
-this reason, the current validation-ranked checkpoints should be interpreted as
-candidates for final evaluation rather than as final conclusions about generation
-quality.
+The dataset is the first limiting factor. The 2,000-file subset makes the
+experiments feasible on rented and local GPUs, but it is small relative to the
+full LMD-derived corpus. The subset is also based on MIDI files rather than a
+music-ID-first selection, so songs with multiple MIDI versions can occupy more
+of the training set than musically distinct songs. Genre tags are LastFM-derived,
+multi-label, and noisy, so they are useful for reporting and split diagnostics
+but not for clean genre-conditioned conclusions. The split construction reduces
+leakage by using music IDs and normalized note signatures, but it cannot
+guarantee that every cover version, transposition, alternate arrangement, or
+metadata mismatch is removed.
 
-The dataset construction also reduces leakage rather than proving its complete
-absence. Grouping by music ID and hashing normalized note content catches exact
-and near-exact duplicates under the implemented signature, but it cannot identify
-all covers, alternate arrangements, transpositions, metadata mismatches, or files
-that share substantial musical material after larger edits. The LastFM tags are
-useful for balancing and reporting, but they are user-derived descriptors and are
-not guaranteed to be consistent across tracks or complete for underrepresented
-styles. As a result, split-balance statistics should be read as diagnostics of
-the constructed subset, not as proof that the subset is fully representative of
-the broader LMD population.
+The model comparison is also limited by the amount of tuning applied to each
+family. The xLSTM setup is derived from several earlier validation sweeps,
+whereas GPT-2 and LLaMA are trained as controlled baselines around the selected
+xLSTM setting. This makes the comparison useful for asking how the architectures
+behave under the same representation and training budget. It does not prove that
+the chosen Transformer sizes, schedules, or regularization settings are the best
+possible Transformer configurations for this dataset.
 
-There are also compute and scale limitations. The sweeps are practical for a
-rented-GPU workflow, but they cover only a small part of the joint design space:
-model size, schedule, batch size, tokenizer structure, context length, sampling
-strategy, and training duration are all coupled. The current experiments give a
-useful path toward a final checkpoint, especially by identifying tokenizer 14 as
-a stronger downstream representation than tokenizer 11, but they do not establish
-that the selected settings are globally optimal. Larger-subset or full-corpus
-training may change the best tokenizer, the amount of overfitting, and the
-relative value of larger xLSTM configurations.
+The fixed context length also limits what the models can learn from complex
+pieces. A 1024-token window may cover a useful amount of music for simpler
+passages, but dense arrangements, fast rhythmic activity, ornamentation, or many
+simultaneous events can consume that window quickly. In those cases the model
+may see only a short local fragment of a larger motif or form-level pattern,
+making it effectively short-sighted even when the original MIDI contains
+long-range structure.
 
-Finally, the project currently focuses on an xLSTM-centered pipeline. This is
-appropriate for the practical objective of the work, but it limits the strength
-of any architectural claim. Without a matched Transformer comparison and a final
-held-out generation evaluation, the report can document that the implemented
-xLSTM system trains and produces validation-competitive checkpoints, but it
-should not yet claim superiority over alternative symbolic-music models.
+The generation evaluation should be read as a structured proxy for musical
+quality. MusPy descriptors and FMD provide reproducible measurements, but they
+cannot fully capture whether a continuation has convincing phrasing, musical
+development, harmonic motion, or arrangement-level coherence. The partial WAV
+renders help with manual listening, but they were prepared as inspection
+material rather than as a controlled listening test with randomized samples,
+raters, rating criteria, and statistical analysis.
+
+There are additional limitations in the generation protocol itself. All models
+use the same prompt construction and sampling settings, which keeps the
+comparison fair but may not be optimal for any individual model. The
+\verb|generation_length: reference| setting also produces continuations with
+reference-matched lengths instead of a fixed duration or a hard token cap. This
+is useful for paired metric computation, but it can create very long generations
+and complicates both runtime comparison and audio rendering.
+
+Finally, the implementation artifacts are useful but not a complete deployment
+study. The Gradio applications show that the trained checkpoints can be loaded,
+sampled from, continued, and inspected interactively. They do not measure user
+preference, latency under concurrent use, robustness to arbitrary uploaded MIDI
+files, or the usability of the interface for musicians. Those questions require
+a separate evaluation beyond the scope of the current thesis.

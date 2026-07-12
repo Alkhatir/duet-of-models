@@ -1,50 +1,68 @@
 \section{Discussion}
+The main outcome of the thesis is not that one architecture wins every
+comparison, but that the ranking depends on the level at which the models are
+judged. The matched next-token evaluation gives the clearest result: under the
+chosen tokenizer, context length, batch size, and update budget, xLSTM is the
+strongest language model. The generated-MIDI evaluation is less one-dimensional.
+The descriptor-level metrics favor different models for different musical
+properties, and the FMD ordering does not exactly follow the held-out
+next-token ordering. This difference is important because it shows that
+validation loss is useful for checkpoint selection, but it is not a complete
+proxy for musical generation quality.
 
-The current design emphasizes reproducibility and separation of concerns.
-Dataset splitting is explicit and leakage-aware; preprocessing avoids irreversible
-musical quantization; tokenization is configured and stored in YAML; xLSTM model
-size is controlled through a small set of scaling parameters; training artifacts
-are stored under \verb|experiments/| with resolved configs, checkpoints, metrics,
-and summaries. This structure makes the validation results traceable: each
-reported number can be connected back to a split file, tokenizer configuration,
-training configuration, and checkpoint path.
+The xLSTM result suggests that the recurrent architecture is well matched to the
+available data and token representation. With only a 2,000-file subset, the
+model may benefit from a stronger sequential inductive bias and from a parameter
+scale that is large enough to model the REMI+ stream without requiring the same
+amount of data as a more general Transformer baseline. The medium xLSTM
+follow-up also shows the boundary of this conclusion: scaling capacity and
+training time together did not automatically improve the validation objective.
+For this dataset size, checkpoint selection and regularization appear at least
+as important as raw model size.
 
-The main experimental finding is that representation choice matters at least as
-much as the small model and schedule changes tested so far. Tokenizer 11 was the
-best configuration in the tokenizer-only autotuning run, but tokenizer 14 gives
-the strongest downstream validation results. This difference is important because
-it shows that a tokenization scheme should not be selected only by round-trip
-fidelity or sequence compactness. For autoregressive training, the layout of the
-event stream also changes the prediction problem seen by the model.
+The Transformer baselines are still informative even though they do not lead on
+held-out next-token metrics. They provide a controlled reference point for how
+decoder-only self-attention behaves under the same symbolic-music setup. The
+LLaMA-style model is the stronger Transformer on token prediction and pitch
+distribution agreement, while the GPT-2-style model gives the lowest FMD in the
+final generation comparison. This means the Transformer results should not be
+treated as failed baselines. They show that different architectural choices can
+preserve different statistical properties of the generated MIDI, even when their
+language-model loss is worse.
 
-The medium-model follow-up is also informative, but in a negative way. It shows
-that larger capacity and longer training do not automatically improve the current
-validation metric. The run reaches its best checkpoint early and then diverges
-from the validation objective while training loss continues to fall. This pattern
-is consistent with overfitting on the 2,000-file subset, but it should not be
-interpreted as proof that the medium architecture is worse in general. The
-experiment changes model size, epoch count, and learning-rate schedule together,
-so it identifies a weak training recipe rather than isolating one cause.
+The strongest practical tradeoff is between predictive accuracy and generation
+cost. xLSTM gives the best held-out token performance and strong rhythmic
+density agreement, but its autoregressive generation is much slower in the final
+run. That cost is plausible for a recurrent model with sLSTM blocks because each
+new token depends on updating recurrent state step by step. The Transformer
+models are weaker in the matched token metrics but substantially faster during
+generation. For an offline evaluation study, the slower xLSTM path is
+acceptable; for an interactive tool, the speed difference matters more.
 
-Validation loss remains only a proxy for generation quality, a limitation also
-reflected in prior symbolic-music generation work that combines objective
-metrics with qualitative or task-specific evaluation
-\citep{dongMuseGANMultitrackSequential2017,ensMMMExploringConditional2020}.
-It measures
-next-token prediction against reference MIDI chunks, not whether sampled
-continuations decode cleanly, avoid excessive repetition, preserve musical form,
-or sound coherent. The current best candidates should therefore be evaluated
-with generated-MIDI metrics and qualitative inspection before the thesis makes a
-final model claim. In particular, the base tokenizer-14 batch-8 and batch-16
-checkpoints are strong candidates for generation evaluation, while tokenizer-10
-and the early best medium checkpoint remain useful comparison points.
+The evaluation setup therefore supports a cautious model-choice rule rather
+than a single universal winner. If the priority is next-token modelling of the
+held-out REMI+ stream, the selected xLSTM checkpoint is the best choice. If the
+priority is fast interactive sampling, the Transformer models are more practical
+despite weaker token metrics. If the priority is a particular musical statistic,
+the choice depends on the statistic: rhythmic sparsity, pitch distribution, and
+FMD do not all select the same model.
 
-The practical value of the current work is that it narrows the next stage. The
-pipeline no longer needs to treat every tokenizer and schedule as equally likely.
-The evidence supports tokenizer 14 as the default downstream representation,
-batch size 8 or 16 as the most relevant base-model setting, and validation-based
-checkpoint selection as necessary because final checkpoints can be misleading.
-The remaining work is therefore not basic infrastructure, but final evaluation:
-generate continuations from held-out prompts, compute generated-MIDI metrics,
-inspect representative outputs, and compare the selected xLSTM checkpoint against
-the later Transformer baseline under matched conditions.
+This also affects how the Gradio applications should be interpreted. They are
+not another quantitative benchmark; they are a way to inspect model behavior at
+the level where aggregate metrics are least complete. MIDI playback, iterative
+continuation, and generation diagnostics make it possible to notice problems
+such as sparse note output, unnatural repetition, or poor continuation behavior
+that are only partly captured by the automatic metrics. In that sense, the apps
+are a useful bridge between the stored experiment artifacts and later listening
+or user studies.
+
+The results should still be read within the limits of the experimental design.
+The comparison is controlled on the most important practical variables, but it
+is not an exhaustive architecture search. The Transformer configurations are
+matched baselines, not separately optimized systems, and the xLSTM conclusion is
+tied to the chosen tokenizer, subset size, schedule, and sampling protocol. A
+larger dataset, a broader Transformer sweep, or a generation protocol with hard
+duration limits could change the balance between models. The current evidence is
+therefore strongest as a controlled comparison of three implemented pipelines
+under one shared setup, and weaker as a general claim about xLSTM or
+Transformer architectures for symbolic music in all settings.
