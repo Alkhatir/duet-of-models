@@ -1,0 +1,21 @@
+{
+  "best_val_loss": 1.4455525039605015,
+  "best_val_mean_token_confidence": 0.6298342040065131,
+  "best_val_perplexity": 4.2441964304836794,
+  "best_val_token_accuracy": 0.5855466925130911,
+  "best_val_top5_token_accuracy": 0.8619133458973965,
+  "final_val_loss": 1.4952854669442581,
+  "final_val_mean_token_confidence": 0.6519856035459677,
+  "final_val_perplexity": 4.460609727743013,
+  "final_val_token_accuracy": 0.5832740392848024,
+  "final_val_top5_token_accuracy": 0.8569510339304133,
+  "global_step": 19432,
+  "test_checkpoint_path": "experiments/xlstm-tok14-batch16-sched-decay8000/best/checkpoint.pt",
+  "test_evaluated": true,
+  "test_loss": 1.349479500323595,
+  "test_mean_token_confidence": 0.65765114631073,
+  "test_perplexity": 3.8554182643925388,
+  "test_token_accuracy": 0.6147736145668429,
+  "test_top5_token_accuracy": 0.8814201497722081,
+  "test_valid_tokens": 4765211.0
+}

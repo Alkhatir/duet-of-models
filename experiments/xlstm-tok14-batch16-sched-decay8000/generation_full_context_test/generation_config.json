@@ -1,0 +1,8 @@
+{
+  "checkpoint": "experiments/xlstm-tok14-batch16-sched-decay8000/best/checkpoint.pt",
+  "data_list": "data_reports/splits/test.txt",
+  "eval_cfg": "configs/eval/transformer_full_context_test.yaml",
+  "model_cfg": "configs/model/xlstm/base.yaml",
+  "model_type": "xlstm",
+  "tok_cfg": "configs/data/14.yaml"
+}
