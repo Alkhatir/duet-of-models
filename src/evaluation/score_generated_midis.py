@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -93,11 +95,131 @@ def aggregate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     return aggregate
 
 
+def finite_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def compute_muspy_metrics(midi_path: Path, metrics_cfg: dict[str, Any]) -> dict[str, float | None]:
+    import muspy
+    import muspy.metrics as muspy_metrics
+
+    music = muspy.read_midi(midi_path)
+    measure_resolution_cfg = metrics_cfg.get("muspy_measure_resolution")
+    measure_resolution = (
+        int(measure_resolution_cfg)
+        if measure_resolution_cfg is not None
+        else int(music.resolution) * 4
+    )
+
+    results: dict[str, float | None] = {}
+    metric_calls = {
+        "n_pitches_used": lambda: muspy_metrics.n_pitches_used(music),
+        "n_pitch_classes_used": lambda: muspy_metrics.n_pitch_classes_used(music),
+        "pitch_range": lambda: muspy_metrics.pitch_range(music),
+        "empty_beat_rate": lambda: muspy_metrics.empty_beat_rate(music),
+        "polyphony": lambda: muspy_metrics.polyphony(music),
+        "polyphony_rate": lambda: muspy_metrics.polyphony_rate(music),
+        "pitch_entropy": lambda: muspy_metrics.pitch_entropy(music),
+        "pitch_class_entropy": lambda: muspy_metrics.pitch_class_entropy(music),
+        "scale_consistency": lambda: muspy_metrics.scale_consistency(music),
+        "drum_pattern_consistency": lambda: muspy_metrics.drum_pattern_consistency(music),
+        "empty_measure_rate": lambda: muspy_metrics.empty_measure_rate(music, measure_resolution),
+        "groove_consistency": lambda: muspy_metrics.groove_consistency(music, measure_resolution),
+        "drum_in_pattern_rate_duple": lambda: muspy_metrics.drum_in_pattern_rate(music, "duple"),
+        "drum_in_pattern_rate_triple": lambda: muspy_metrics.drum_in_pattern_rate(music, "triple"),
+    }
+    for root in range(12):
+        for mode in ("major", "minor"):
+            metric_calls[f"pitch_in_scale_rate_root_{root}_{mode}"] = (
+                lambda root=root, mode=mode: muspy_metrics.pitch_in_scale_rate(music, root, mode)
+            )
+
+    for name, metric_call in metric_calls.items():
+        try:
+            results[name] = finite_or_none(metric_call())
+        except Exception:
+            results[name] = None
+    return results
+
+
+def link_or_copy_midi(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def prepare_fmd_input_dirs(samples_dir: Path, records: list[dict[str, Any]]) -> tuple[Path, Path, int]:
+    fmd_root = samples_dir / "fmd_inputs"
+    reference_dir = fmd_root / "reference"
+    generated_dir = fmd_root / "generated"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in [*reference_dir.glob("*.mid"), *generated_dir.glob("*.mid")]:
+        stale_path.unlink()
+
+    count = 0
+    for record in records:
+        if not record.get("score_success"):
+            continue
+        reference_path = Path(str(record["reference_midi"]))
+        generated_path = Path(str(record["generated_midi"]))
+        sample_id = int(record.get("sample_id", count))
+        link_or_copy_midi(reference_path, reference_dir / f"{sample_id:04d}.mid")
+        link_or_copy_midi(generated_path, generated_dir / f"{sample_id:04d}.mid")
+        count += 1
+    return reference_dir, generated_dir, count
+
+
+def compute_official_fmd(
+    samples_dir: Path,
+    records: list[dict[str, Any]],
+    metrics_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    fmd_cfg = metrics_cfg.get("fmd", {})
+    if not bool(fmd_cfg.get("enabled", True)):
+        return {"fmd_enabled": False}
+    required = bool(fmd_cfg.get("required", True))
+
+    reference_dir, generated_dir, count = prepare_fmd_input_dirs(samples_dir, records)
+    result: dict[str, Any] = {
+        "fmd_enabled": True,
+        "fmd_sample_count": count,
+        "fmd_reference_dir": str(reference_dir),
+        "fmd_generated_dir": str(generated_dir),
+    }
+    if count == 0:
+        message = "No successfully scored MIDI pairs available for FMD."
+        if required:
+            raise RuntimeError(message)
+        result["fmd_error"] = message
+        return result
+
+    try:
+        from frechet_music_distance import FrechetMusicDistance
+
+        metric = FrechetMusicDistance(
+            feature_extractor=str(fmd_cfg.get("feature_extractor", "clamp2")),
+            gaussian_estimator=str(fmd_cfg.get("gaussian_estimator", "mle")),
+            verbose=bool(fmd_cfg.get("verbose", True)),
+        )
+        result["frechet_music_distance"] = float(
+            metric.score(reference_path=reference_dir, test_path=generated_dir)
+        )
+    except Exception as exc:
+        if required:
+            raise
+        result["fmd_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def score_sample(sample_json_path: Path, metrics_cfg: dict[str, Any]) -> dict[str, Any]:
-    import pretty_midi
-
-    from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
-
     sample = load_json(sample_json_path)
     result: dict[str, Any] = {
         **{key: value for key, value in sample.items() if not key.endswith("_ids")},
@@ -111,28 +233,51 @@ def score_sample(sample_json_path: Path, metrics_cfg: dict[str, Any]) -> dict[st
     reference_path = Path(str(sample["reference_midi"]))
     generated_path = Path(str(sample["generated_midi"]))
     try:
-        prompt_end_s = pretty_midi.PrettyMIDI(str(prompt_path)).get_end_time()
-        metrics = midi_roundtrip_metrics_onset_chroma(
-            original_mid=str(reference_path),
-            reconstructed_mid=str(generated_path),
-            onset_tol=float(metrics_cfg["onset_tolerance_sec"]),
-            include_drums=bool(metrics_cfg["include_drums"]),
-            fs_chroma=int(metrics_cfg["chroma_fs"]),
-            calculate_transpose_invariant_chroma=bool(metrics_cfg["transpose_invariant"]),
-            start_s=float(prompt_end_s),
-            max_len_s=None,
-        )
-        result.update(
-            {
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "onset_mae_sec": metrics["onset_mae_sec"],
-                "dur_mae_sec": metrics["dur_mae_sec"],
-                "chroma_dtw": metrics["chroma_dtw"],
-                "score_success": True,
-            }
-        )
+        roundtrip_cfg = metrics_cfg.get("roundtrip", {})
+        roundtrip_enabled = bool(roundtrip_cfg.get("enabled", True))
+        metrics: dict[str, Any] = {}
+        if roundtrip_enabled:
+            import pretty_midi
+
+            from src.evaluation.music_metrics import midi_roundtrip_metrics_onset_chroma
+
+            prompt_end_s = pretty_midi.PrettyMIDI(str(prompt_path)).get_end_time()
+            reference_pm = pretty_midi.PrettyMIDI(str(reference_path))
+            generated_pm = pretty_midi.PrettyMIDI(str(generated_path))
+            metrics = midi_roundtrip_metrics_onset_chroma(
+                original_mid=reference_pm,
+                reconstructed_mid=generated_pm,
+                onset_tol=float(metrics_cfg["onset_tolerance_sec"]),
+                include_drums=bool(metrics_cfg["include_drums"]),
+                fs_chroma=int(metrics_cfg["chroma_fs"]),
+                calculate_transpose_invariant_chroma=bool(metrics_cfg["transpose_invariant"]),
+                start_s=float(prompt_end_s),
+                max_len_s=None,
+            )
+        reference_muspy = compute_muspy_metrics(reference_path, metrics_cfg)
+        generated_muspy = compute_muspy_metrics(generated_path, metrics_cfg)
+        result["roundtrip_enabled"] = roundtrip_enabled
+        if roundtrip_enabled:
+            result.update(
+                {
+                    "precision": metrics["precision"],
+                    "recall": metrics["recall"],
+                    "f1": metrics["f1"],
+                    "onset_mae_sec": metrics["onset_mae_sec"],
+                    "dur_mae_sec": metrics["dur_mae_sec"],
+                    "chroma_dtw": metrics["chroma_dtw"],
+                }
+            )
+        result["score_success"] = True
+        for key, value in reference_muspy.items():
+            result[f"reference_muspy_{key}"] = value
+        for key, value in generated_muspy.items():
+            result[f"generated_muspy_{key}"] = value
+            reference_value = reference_muspy[key]
+            if value is not None and reference_value is not None:
+                result[f"muspy_{key}_abs_diff"] = abs(value - reference_value)
+            else:
+                result[f"muspy_{key}_abs_diff"] = None
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result
@@ -150,6 +295,7 @@ def main() -> None:
         for sample_json_path in sorted((samples_dir / "samples").glob("*/sample.json"))
     ]
     aggregate = aggregate_metrics(records)
+    aggregate.update(compute_official_fmd(samples_dir, records, eval_cfg["metrics"]))
     aggregate["model_type"] = args.model_type or generation_config.get("model_type")
     aggregate["checkpoint"] = args.checkpoint or generation_config.get("checkpoint")
     save_json(samples_dir / "aggregate_metrics.json", aggregate)

@@ -1,0 +1,185 @@
+\section{Results}
+
+This section summarizes the main results from the thesis in the same order as
+the experimental workflow. The first result group reports the xLSTM
+model-selection stage, where validation loss was used to choose a recurrent
+checkpoint and to estimate the practical compute budget of the search. The
+second result group reports the matched xLSTM, GPT-2-style Transformer, and
+LLaMA-style Transformer comparison on next-token metrics. The third group
+summarizes the generated-MIDI evaluation, and the final group reports the
+interactive Gradio deliverable.
+
+\subsection{xLSTM Model-Selection Results}
+
+The xLSTM model-selection results are validation-stage results. They show that
+the implemented training pipeline can train xLSTM language models on REMI-style
+music tokens, compare checkpoints, and identify stronger configurations for the
+controlled Transformer comparison. They should therefore be interpreted as
+selection evidence, not as a final statement about musical quality.
+
+\subsubsection{Validation Results}
+
+Table~\ref{tab:result-checkpoints} summarizes representative completed xLSTM
+runs from the local \verb|summary.json| files. The strongest validation-loss
+checkpoint is the base xLSTM with tokenizer 14 and batch size 16. The
+batch-size-8 tokenizer-14 run is almost tied and keeps the same practical setup
+used by the broader sweep. The medium model does not improve the
+validation-selected result under its current 15-epoch restart schedule, even
+though it has more than twice as many parameters.
+
+\begin{table}[htbp]
+	\centering
+	\scriptsize
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrrrrrr}
+			\toprule
+			Run                                & Params & Tok. & Batch & Steps & Best step & Best val. loss  & Best val. top-5 acc. \\
+			\midrule
+			\texttt{tok\_14\_batch\_16}        & 3.70M  & 14   & 16    & 7287  & 4000      & \textbf{1.4456} & \textbf{0.8619}      \\
+			\texttt{tok\_14}                   & 3.70M  & 14   & 8     & 14574 & 6000      & 1.4471          & 0.8614               \\
+			\texttt{constant\_1e-4}            & 3.67M  & 11   & 8     & 12705 & 12000     & 1.5759          & 0.8365               \\
+			\texttt{xlstm-small-batch8-tok11}  & 1.63M  & 11   & 8     & 12705 & 12000     & 1.5698          & 0.8388               \\
+			\texttt{xlstm-base-batch8-tok11}   & 3.67M  & 11   & 8     & 12705 & 10000     & 1.5811          & 0.8367               \\
+			\texttt{xlstm-medium-batch8-tok14} & 9.28M  & 14   & 8     & 72870 & 9000      & 1.5173          & 0.8542               \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Representative xLSTM validation results from local experiment summaries. Lower validation loss is better. The medium row reports the early best checkpoint, not the final checkpoint.}
+	\label{tab:result-checkpoints}
+\end{table}
+
+The validation ranking supports two main observations. First, tokenizer 14 is a
+better downstream representation for the current xLSTM setup than tokenizer 11,
+even though tokenizer 11 was the best tokenizer-only round-trip candidate. This
+confirms that compactness and reconstruction metrics are useful diagnostics but
+do not fully predict language-model training behavior. Second, simply increasing
+model size is not enough. The medium tokenizer-14 run reaches its best
+validation loss early and then overfits, so its final checkpoint is worse than
+its selected checkpoint and worse than the base tokenizer-14 candidates.
+
+\subsubsection{Compute Summary}
+
+Table~\ref{tab:compute-summary} reports the logged wall-clock runtime recorded
+in W\&B, together with GPU metadata from each run's \verb|wandb-metadata.json|
+file. These values are approximate compute accounting numbers for the practical
+xLSTM search: they combine runs made during different stages of the search and
+should not be read as controlled hardware benchmarks.
+
+\begin{table}[htbp]
+	\centering
+	\small
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{lrrlll}
+			\toprule
+			Experiment stage                & Runs & Logged hours & GPU used                 & VRAM       & Purpose                                               \\
+			\midrule
+			Warm-up scale/batch checks      & 4    & 6.78         & RTX 3050 / RTX 3060      & 6 / 12 GiB & Verify training behavior and basic scale choices      \\
+			Learning-rate sweep             & 10   & 15.86        & RTX 3060                 & 12 GiB     & Compare scheduler and learning-rate settings          \\
+			Tokenizer sweep                 & 8    & 13.85        & RTX 3060                 & 12 GiB     & Compare REMI-style tokenizer conditions               \\
+			Refined tokenizer--batch sweep  & 6    & 11.53        & RTX 3060                 & 12 GiB     & Recheck tokenizer 10/14 with batch sizes 4, 8, and 16 \\
+			Medium-model follow-up          & 1    & 17.76        & RTX 3060                 & 12 GiB     & Test larger xLSTM capacity with longer training       \\
+			\midrule
+			Total summarized xLSTM training & 29   & 65.78        & Mixed RTX 3050/3060 runs & 6--12 GiB  & Validation-stage experimental budget                  \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{Approximate compute used by completed xLSTM experiments, aggregated from W\&B runtime summaries and run metadata.}
+	\label{tab:compute-summary}
+\end{table}
+
+The compute distribution explains why the early results should be treated as a
+model-selection phase. Most of the budget was spent on validation sweeps rather
+than on one final long training run. This was appropriate because the main
+uncertainty was representation and optimization choice; once tokenizer 14 and
+batch size 16 were selected, the final comparison could spend compute on a
+matched xLSTM, GPT-2-style, and LLaMA-style evaluation.
+
+\subsection{Matched Training and Test Results}
+
+\subsubsection{Validation and Test Results}
+
+The matched comparison changes the role of the results from xLSTM search to
+architecture comparison. All three models use tokenizer 14, batch size 16, a
+1024-token context, eight training epochs, and 19,432 optimizer updates. Under
+these matched conditions, the xLSTM checkpoint gives the strongest held-out
+next-token result. Its test loss is 1.3495 and its test perplexity is 3.8554,
+compared with 1.8555 and 6.3948 for the LLaMA-style Transformer, and 1.9657 and
+7.1399 for the GPT-2-style Transformer.
+
+The validation trajectories in Figure~\ref{fig:matched-training-curves} and
+Figure~\ref{fig:matched-validation-loss} also show different training behavior.
+xLSTM reaches its best validation checkpoint at step 4000 and remains relatively
+stable. GPT-2 improves more slowly and is selected at step 8000. LLaMA is the
+stronger Transformer on held-out token metrics, but its curve overfits after its
+step-4000 checkpoint. The next-token evidence therefore favors xLSTM for the
+matched setup, with LLaMA as the stronger of the two Transformer baselines.
+
+\subsubsection{Compute Summary}
+
+The final comparison is more controlled than the earlier xLSTM search because
+the models share the same update budget and data conditions. Table~\ref{tab:matched-compute-summary}
+summarizes the compute metadata recorded in W\&B for the three matched runs.
+
+\begin{table}[htbp]
+	\centering
+	\scriptsize
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{llrrrrll}
+			\toprule
+			Model                   & W\&B run                                     & Logged runtime (h) & Updates & Updates/s & Batch & GPU              & Program                             \\
+			\midrule
+			xLSTM                   & \texttt{xlstm-tok14-batch16-sched-decay8000} & 3.83               & 19,432  & 1.41      & 16    & RTX 3060, 12 GiB & \path{src.models.xlstm.train}       \\
+			GPT-2-style Transformer & \texttt{tok\_14\_batch\_16\_gpt2}            & 2.04               & 19,432  & 2.64      & 16    & RTX 3060, 12 GiB & \path{src.models.Transformer.train} \\
+			LLaMA-style Transformer & \texttt{tok\_14\_batch\_16\_llama}           & 1.94               & 19,432  & 2.78      & 16    & RTX 3060, 12 GiB & \path{src.models.Transformer.train} \\
+			\bottomrule
+		\end{tabular}
+	}
+	\caption{W\&B compute summary for the matched training runs in the \texttt{duet-of-models} project. Runtime is reported from W\&B summary fields and GPU metadata from the W\&B run metadata.}
+	\label{tab:matched-compute-summary}
+\end{table}
+
+The Transformer rows use the Hugging Face Trainer's recorded
+\verb|train_runtime| values, 7348.80 seconds for GPT-2 and 6981.35 seconds for
+LLaMA. The xLSTM trainer does not export an equivalent \verb|train_runtime|
+summary field, so its row uses the W\&B run \verb|_runtime| value of 13783.34
+seconds. The updates-per-second value for xLSTM is therefore an approximate
+logged-run rate, while the Transformer values come directly from the Trainer
+summary. All three runs used the same GPU class, the same batch size, the same
+epoch budget, and the same 19,432 optimizer updates, so the table is useful for
+practical compute accounting. It should not be read as a hardware-normalized
+architecture speed benchmark, because the xLSTM and Transformer trainers use
+different implementations and log runtime through different code paths.
+
+\subsection{Generation Results}
+
+\subsubsection{Generation Metrics}
+
+The generated-MIDI evaluation gives a more mixed result than the next-token
+test metrics. All three selected checkpoints generated 200 continuations, and
+all generated outputs decoded and scored successfully. GPT-2 has the lowest FMD
+score at 201.91, followed by xLSTM at 202.54 and LLaMA at 205.64. These values
+are close enough that FMD alone should not be treated as a complete ranking.
+
+The MusPy descriptor differences in
+Table~\ref{tab:matched-generation-metrics} and
+Figure~\ref{fig:matched-generation-metric-distributions} separate the models
+more clearly. xLSTM has the best empty-beat-rate and polyphony-rate agreement,
+which indicates stronger preservation of rhythmic density and simultaneous-note
+structure. LLaMA gives the best pitch-entropy agreement, suggesting closer pitch
+distribution statistics. GPT-2 has the best FMD and pitch-range difference, but
+also the weakest pitch-entropy and empty-beat-rate differences. The generation
+results therefore do not overturn the next-token result, but they show that
+different metrics favor different musical properties.
+
+\subsubsection{Compute Summary}
+
+Generation time is the largest practical difference in the final evaluation.
+The generated-MIDI file timestamps imply about 5.50 hours for GPT-2, 8.78 hours
+for LLaMA, and 44.81 hours for xLSTM over the same 200-sample continuation set.
+Because all three runs generated the same total continuation length, the
+approximate throughputs are 191.9 tokens/s for GPT-2, 120.2 tokens/s for LLaMA,
+and 23.5 tokens/s for xLSTM. The slower xLSTM decoding is consistent with the
+token-by-token cost of recurrent xLSTM blocks, especially the sLSTM blocks, but
+the thesis treats this as practical runtime evidence rather than a controlled
+architecture benchmark.
+

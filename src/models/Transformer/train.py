@@ -24,7 +24,6 @@ from transformers import (
 
 from src.data.tokenizer import MidiTokBuilder
 from src.utils.midi_utils import (
-    build_three_datasets_from_chunks,
     chunk_split,
     load_midi_paths_from_list,
     split_cache_dir,
@@ -39,6 +38,101 @@ class PerplexityCallback(TrainerCallback):
             logs["eval_perplexity"] = math.exp(min(20.0, logs["eval_loss"]))
         if logs and "loss" in logs:
             logs["train_perplexity"] = math.exp(min(20.0, logs["loss"]))
+
+
+def compute_torch_token_metric_counts(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> dict[str, float]:
+    if logits.size(-2) < 2 or labels.size(-1) < 2:
+        return {"correct": 0.0, "top5_correct": 0.0, "valid_tokens": 0.0}
+
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+    valid_mask = shift_labels != -100
+    valid_count = int(valid_mask.sum().item())
+    if valid_count == 0:
+        return {"correct": 0.0, "top5_correct": 0.0, "valid_tokens": 0.0}
+
+    valid_logits = shift_logits[valid_mask]
+    valid_labels = shift_labels[valid_mask]
+    predictions = valid_logits.argmax(dim=-1)
+    topk = min(5, valid_logits.size(-1))
+    topk_predictions = valid_logits.topk(topk, dim=-1).indices
+
+    return {
+        "correct": float((predictions == valid_labels).sum().item()),
+        "top5_correct": float(
+            (topk_predictions == valid_labels.unsqueeze(-1))
+            .any(dim=-1)
+            .sum()
+            .item()
+        ),
+        "valid_tokens": float(valid_count),
+    }
+
+
+class TokenMetricTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reset_train_token_metric_counts()
+
+    def _reset_train_token_metric_counts(self) -> None:
+        self._train_token_correct = 0.0
+        self._train_top5_token_correct = 0.0
+        self._train_valid_tokens = 0.0
+
+    def _update_train_token_metric_counts(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> None:
+        counts = compute_torch_token_metric_counts(
+            logits.detach(),
+            labels.detach(),
+        )
+        self._train_token_correct += counts["correct"]
+        self._train_top5_token_correct += counts["top5_correct"]
+        self._train_valid_tokens += counts["valid_tokens"]
+
+    def _consume_train_token_metrics(self) -> dict[str, float]:
+        if self._train_valid_tokens <= 0:
+            return {}
+
+        metrics = {
+            "token_accuracy": self._train_token_correct / self._train_valid_tokens,
+            "top5_token_accuracy": (
+                self._train_top5_token_correct / self._train_valid_tokens
+            ),
+            "valid_tokens": self._train_valid_tokens,
+        }
+        self._reset_train_token_metric_counts()
+        return metrics
+
+    def compute_loss(
+        self,
+        model: torch.nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        return_outputs: bool = False,
+        num_items_in_batch: torch.Tensor | int | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, Any]:
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        loss = outputs["loss"] if isinstance(outputs, dict) else outputs.loss
+
+        if model.training and labels is not None:
+            logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+            self._update_train_token_metric_counts(logits, labels)
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        is_eval_or_test_log = any(
+            key.startswith(("eval_", "test_")) for key in logs
+        )
+        if not is_eval_or_test_log:
+            logs.update(self._consume_train_token_metrics())
+        super().log(logs, start_time=start_time)
 
 
 def load_resolved_config(model_cfg_path: str, train_cfg_path: str) -> DictConfig:
@@ -117,23 +211,16 @@ def build_datasets(
     val_list_path: Path,
     test_list_path: Path | None = None,
 ):
-    max_seq_len = int(cfg.data.block_size)
-    if test_list_path is not None:
-        train_midis = load_midi_paths_from_list(train_list_path)
-        val_midis = load_midi_paths_from_list(val_list_path)
-        test_midis = load_midi_paths_from_list(test_list_path)
-        return build_three_datasets_from_chunks(
-            tokenizer=tokenizer,
-            train_src=train_midis,
-            val_src=val_midis,
-            test_src=test_midis,
-            max_seq_len=max_seq_len,
-        )
-
     from miditok.pytorch_data import DataCollator, DatasetMIDI
 
+    max_seq_len = int(cfg.data.block_size)
     train_midis = load_midi_paths_from_list(train_list_path)
     val_midis = load_midi_paths_from_list(val_list_path)
+    test_midis = (
+        load_midi_paths_from_list(test_list_path)
+        if test_list_path is not None
+        else None
+    )
     train_chunks = chunk_split(
         train_midis,
         tokenizer,
@@ -146,6 +233,16 @@ def build_datasets(
         str(split_cache_dir(val_midis, max_seq_len, "val")),
         max_seq_len,
     )
+    test_chunks = (
+        chunk_split(
+            test_midis,
+            tokenizer,
+            str(split_cache_dir(test_midis, max_seq_len, "test")),
+            max_seq_len,
+        )
+        if test_midis is not None
+        else None
+    )
     common = {
         "tokenizer": tokenizer,
         "max_seq_len": max_seq_len,
@@ -154,12 +251,17 @@ def build_datasets(
     }
     train_ds = DatasetMIDI(files_paths=train_chunks, **common)
     val_ds = DatasetMIDI(files_paths=val_chunks, **common)
+    test_ds = (
+        DatasetMIDI(files_paths=test_chunks, **common)
+        if test_chunks is not None
+        else None
+    )
     collator = DataCollator(
         pad_token_id=tokenizer.pad_token_id,
         copy_inputs_as_labels=True,
-        shift_labels=True,
+        shift_labels=False,
     )
-    return train_ds, val_ds, None, collator
+    return train_ds, val_ds, test_ds, collator
 
 
 def _normalise_training_arg_names(raw: dict[str, Any]) -> dict[str, Any]:
@@ -487,6 +589,25 @@ def compute_token_metrics(eval_pred) -> dict[str, float]:
         top5_predictions = np.expand_dims(predictions, axis=-1)
         confidences = np.ones_like(predictions, dtype=np.float32)
 
+    token_predictions = np.asarray(token_predictions)
+    top5_predictions = np.asarray(top5_predictions)
+    confidences = np.asarray(confidences)
+    labels = np.asarray(labels)
+
+    if labels.shape[-1] < 2:
+        return {
+            "token_accuracy": 0.0,
+            "top5_token_accuracy": 0.0,
+            "mean_token_confidence": 0.0,
+            "valid_tokens": 0.0,
+        }
+
+    # Hugging Face causal LM loss compares logits[:, :-1] to labels[:, 1:].
+    token_predictions = token_predictions[..., :-1]
+    top5_predictions = top5_predictions[..., :-1, :]
+    confidences = confidences[..., :-1]
+    labels = labels[..., 1:]
+
     valid_mask = labels != -100
     valid_count = int(valid_mask.sum())
     if valid_count == 0:
@@ -552,7 +673,7 @@ def train(
         tok_cfg=tok_cfg,
     )
 
-    trainer = Trainer(
+    trainer = TokenMetricTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
@@ -572,11 +693,11 @@ def train(
         for key, value in train_result.metrics.items()
         if isinstance(value, int | float)
     }
-    val_metrics = trainer.evaluate(eval_dataset=val_ds, metric_key_prefix="val")
+    eval_metrics = trainer.evaluate(eval_dataset=val_ds, metric_key_prefix="eval")
     final_metrics.update(
         {
             key: float(value)
-            for key, value in _add_perplexity(val_metrics, "val_loss").items()
+            for key, value in _add_perplexity(eval_metrics, "eval_loss").items()
             if isinstance(value, int | float)
         }
     )

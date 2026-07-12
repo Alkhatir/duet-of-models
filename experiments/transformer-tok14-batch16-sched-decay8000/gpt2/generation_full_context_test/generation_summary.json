@@ -1,0 +1,8 @@
+{
+  "checkpoint": "experiments/transformer-tok14-batch16-sched-decay8000/gpt2",
+  "decode_failure_count": 0,
+  "decode_success_count": 200,
+  "decode_success_rate": 1.0,
+  "model_type": "transformer",
+  "num_samples": 200
+}

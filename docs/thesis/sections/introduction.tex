@@ -1,0 +1,49 @@
+\section{Introduction}
+
+Symbolic music generation represents music as structured symbolic events
+\citep{huangPopMusicTransformer2020,fradetMiditokPythonPackage2023}, such
+as note onsets, durations, velocities, programs, and timing information, rather
+than as raw audio waveforms. This representation makes it possible to model
+musical structure with sequence models while keeping the output editable as MIDI.
+Instead of predicting samples in the audio domain, the system predicts symbolic
+events that can later be decoded into notes, instruments, tempo changes, and
+other performance-related information.
+
+In this project, MIDI files are converted into discrete token sequences and
+modeled with autoregressive neural language models. This follows the same broad
+sequence-modeling view used by recent symbolic-music Transformer systems
+\citep{hsiaoCompoundWordTransformer2021,ensMMMExploringConditional2020}. The
+central question of the thesis is how an xLSTM model compares with
+Transformer-based language models when all three are trained for the same
+symbolic music generation task. Rather than treating the models as isolated
+implementations, the work uses a shared experimental pipeline so that xLSTM,
+GPT-2-style, and LLaMA-style models can be compared under matched data,
+tokenization, context-length, sampling, and evaluation conditions.
+
+The repository\footnote{\url{https://github.com/Alkhatir/duet-of-models}} is
+organized around this controlled comparison. The first stage develops the data
+and modelling infrastructure: selecting a usable MIDI subset, constructing
+leakage-aware train/validation/test splits, choosing a REMI+-style token
+representation, training xLSTM models, tracking validation behaviour, and
+selecting a strong xLSTM configuration. The second stage reuses this derived
+setup for Transformer experiments, training GPT-2-style and LLaMA-style models
+on the same representation and evaluating their generated MIDI outputs against
+the xLSTM baseline.
+
+The thesis also includes a practical interface for using the trained models. A
+Gradio application is developed to load selected checkpoints, accept or choose
+MIDI prompts, generate continuations with configurable sampling parameters, and
+present the resulting MIDI files for inspection and playback. This is important
+because symbolic music generation cannot be judged from scalar metrics alone:
+validation loss and token accuracy describe modelling behaviour, while the
+generated MIDI files reveal musical continuity, instrumentation, rhythmic
+coherence, and failure cases such as sparse or fragmented generations.
+
+The main goal of this thesis is therefore to document and evaluate a complete
+symbolic-music generation workflow rather than a single model in isolation. The
+following sections describe the dataset and split construction, preprocessing
+and tokenization choices, model architectures, training setup, hyperparameter
+search, model selection, comparative results, limitations, and the interactive
+generation interface. Together, these components support a reproducible
+comparison between recurrent and Transformer-based sequence models for symbolic
+music generation.

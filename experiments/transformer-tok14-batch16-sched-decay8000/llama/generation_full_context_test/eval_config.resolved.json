@@ -1,0 +1,48 @@
+{
+  "device": "cuda",
+  "generation_length": "reference",
+  "max_generation_tokens": 512,
+  "max_prompt_tokens": 1024,
+  "metrics": {
+    "chroma_fs": 2,
+    "fmd": {
+      "enabled": true,
+      "feature_extractor": "clamp2",
+      "gaussian_estimator": "mle",
+      "required": true,
+      "verbose": true
+    },
+    "include_drums": false,
+    "muspy_measure_resolution": null,
+    "onset_tolerance_sec": 0.03,
+    "roundtrip": {
+      "enabled": false
+    },
+    "transpose_invariant": true
+  },
+  "metrics_config": "configs/eval/music_metrics.yaml",
+  "min_prompt_tokens": 1,
+  "num_samples": 0,
+  "output": {
+    "copy_reference_midi": false,
+    "flat_generated_midis": true,
+    "generated_subdir": "generated_midis",
+    "write_prompt_midi": true
+  },
+  "prompt_mode": "max_context",
+  "prompt_ratio": 0.5,
+  "sample_mode": "full_file_context",
+  "sampling": {
+    "greedy": false,
+    "temperature": 1.0,
+    "top_k": 50,
+    "top_p": 0.95
+  },
+  "seed": 42,
+  "split": "test",
+  "wandb": {
+    "enabled": false,
+    "project": "duet-of-models",
+    "run_name": null
+  }
+}

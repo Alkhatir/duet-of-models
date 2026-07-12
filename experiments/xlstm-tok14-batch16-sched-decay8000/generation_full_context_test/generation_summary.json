@@ -1,0 +1,13 @@
+{
+  "checkpoint": "experiments/xlstm-tok14-batch16-sched-decay8000/best/checkpoint.pt",
+  "decode_failure_count": 0,
+  "decode_success_count": 200,
+  "decode_success_rate": 1.0,
+  "generated_tokens_timed": 3038912,
+  "model_type": "xlstm",
+  "num_samples": 200,
+  "timed_sample_count": 166,
+  "tokens_per_second": 23.31718611190582,
+  "total_decode_seconds": 6.497791835805401,
+  "total_generation_seconds": 130329.27667238214
+}

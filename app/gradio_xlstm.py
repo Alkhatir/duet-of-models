@@ -427,11 +427,9 @@ def _as_token_ids(encoded: TokSequence | list[TokSequence]) -> list[int]:
     return [int(token_id) for token_id in ids]
 
 
-def encode_prompt(tokenizer, prompt_midi: str | None, prompt_tokens: int) -> list[int]:
-    if prompt_midi:
-        prompt_path = Path(prompt_midi).expanduser()
-        if not prompt_path.is_file() and not prompt_path.is_absolute():
-            prompt_path = Path.cwd() / prompt_path
+def encode_prompt(tokenizer, prompt_midi: Any | None, prompt_tokens: int) -> list[int]:
+    prompt_path = _resolve_midi_path(prompt_midi)
+    if prompt_path is not None:
         token_ids = _as_token_ids(tokenizer.encode(prompt_path))
         return token_ids[: max(1, min(prompt_tokens, len(token_ids)))]
     if "BOS_None" in tokenizer:
@@ -609,8 +607,24 @@ def generation_statistics(
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
-def _resolve_midi_path(midi_path: str | None) -> Path | None:
+def _resolve_midi_path(midi_path: Any | None) -> Path | None:
     if not midi_path:
+        return None
+    if isinstance(midi_path, dict):
+        for key in ("path", "name", "orig_name"):
+            value = midi_path.get(key)
+            if value:
+                resolved = _resolve_midi_path(value)
+                if resolved is not None:
+                    return resolved
+        return None
+    if not isinstance(midi_path, (str, Path)):
+        for attr in ("path", "name"):
+            value = getattr(midi_path, attr, None)
+            if value:
+                resolved = _resolve_midi_path(value)
+                if resolved is not None:
+                    return resolved
         return None
     path = Path(midi_path).expanduser()
     if not path.is_file() and not path.is_absolute():
@@ -618,7 +632,7 @@ def _resolve_midi_path(midi_path: str | None) -> Path | None:
     return path if path.is_file() else None
 
 
-def midi_player_html(midi_path: str | None, title: str = "MIDI") -> str:
+def midi_player_html(midi_path: Any | None, title: str = "MIDI") -> str:
     resolved_path = _resolve_midi_path(midi_path)
     if resolved_path is None:
         return "<div class='midi-web-player-empty'>No MIDI selected.</div>"
@@ -680,7 +694,7 @@ def midi_player_html(midi_path: str | None, title: str = "MIDI") -> str:
     )
 
 
-def preview_midi(midi_path: str | None) -> str:
+def preview_midi(midi_path: Any | None) -> str:
     return midi_player_html(midi_path, title="Prompt")
 
 
@@ -689,6 +703,7 @@ def generate_music(
     model_cfg_path: str,
     tokenizer_cfg_path: str,
     prompt_midi: str | None,
+    continuation_midi: str | None,
     prompt_tokens: int,
     max_new_tokens: int,
     greedy: bool,
@@ -711,9 +726,10 @@ def generate_music(
     if loaded.adapter.device.type == "cuda":
         torch.cuda.manual_seed_all(int(seed))
 
+    source_midi = continuation_midi or prompt_midi
     prompt_ids = encode_prompt(
         loaded.tokenizer,
-        prompt_midi=prompt_midi,
+        prompt_midi=source_midi,
         prompt_tokens=int(prompt_tokens),
     )
     prompt_ids = prompt_ids[-loaded.adapter.max_context_length :]
@@ -751,9 +767,10 @@ def generate_music(
             "Use a longer generation length or provide a MIDI prompt."
         ) from exc
 
+    source_label = "continuation input" if continuation_midi else "prompt"
     status = (
         f"Generated {len(continuation_ids)} new tokens from "
-        f"{len(prompt_ids)} prompt tokens on {loaded.adapter.device}."
+        f"{len(prompt_ids)} {source_label} tokens on {loaded.adapter.device}."
     )
     stats = generation_statistics(
         loaded.tokenizer,
@@ -862,6 +879,11 @@ def create_demo(args: argparse.Namespace):
                     file_types=[".mid", ".midi"],
                     type="filepath",
                 )
+                continuation_prompt = gr.File(
+                    label="Continue from generated MIDI",
+                    file_types=[".mid", ".midi"],
+                    type="filepath",
+                )
                 prompt_tokens = gr.Slider(
                     minimum=1,
                     maximum=1024,
@@ -891,6 +913,7 @@ def create_demo(args: argparse.Namespace):
             top_p = gr.Slider(0.05, 1.0, value=0.95, step=0.01, label="Top-p")
 
         generate = gr.Button("Generate", variant="primary")
+        continue_last = gr.Button("Use Generated MIDI as Continuation Input")
         generated_file = gr.File(label="Generated MIDI")
         generated_preview = gr.HTML(label="Generated MIDI player")
         status = gr.Textbox(label="Status")
@@ -920,6 +943,11 @@ def create_demo(args: argparse.Namespace):
             inputs=[prompt],
             outputs=[prompt_preview],
         )
+        continue_last.click(
+            fn=lambda midi_path: midi_path,
+            inputs=[generated_file],
+            outputs=[continuation_prompt],
+        )
 
         generate.click(
             fn=generate_music,
@@ -928,6 +956,7 @@ def create_demo(args: argparse.Namespace):
                 model_cfg,
                 tokenizer_cfg,
                 prompt,
+                continuation_prompt,
                 prompt_tokens,
                 max_new_tokens,
                 greedy,

@@ -1,0 +1,42 @@
+\section{Conclusion}
+
+This thesis developed and evaluated a symbolic-music generation pipeline based
+on REMI+-style MIDI tokenization, autoregressive language modelling, and
+generated-MIDI evaluation. The work began from an xLSTM-focused setup but was
+extended into a controlled comparison between xLSTM, a GPT-2-style Transformer,
+and a LLaMA-style Transformer. The final repository now covers dataset
+construction, leakage-aware splitting, preprocessing, tokenizer selection,
+model training, checkpoint selection, W\&B logging, generated-MIDI scoring, and
+interactive Gradio applications for both recurrent and Transformer checkpoints.
+
+The strongest next-token model in the matched comparison is the selected xLSTM
+checkpoint. Under the shared tokenizer, context length, batch size, and update
+budget, it achieves the best held-out loss, perplexity, and token accuracy. The
+Transformer baselines do not match that token-level performance, but they remain
+useful comparison points: the LLaMA-style model is the stronger Transformer
+baseline, while the GPT-2-style model obtains the lowest FMD in the generation
+evaluation. The generated-MIDI metrics therefore show that musical output
+quality cannot be reduced to one scalar metric or to validation loss alone.
+
+The practical conclusion is that the selected xLSTM is the best model in this
+thesis when next-token modelling and rhythmic-density agreement are prioritized,
+but it is also the most expensive model to sample from. The Transformer models
+are weaker language models in this setup but are faster generators and preserve
+some generated-MIDI statistics competitively. This creates a real deployment
+tradeoff: the preferred model depends on whether the priority is predictive
+accuracy, generation speed, or a particular musical descriptor.
+
+The Gradio applications complete the project by making the trained checkpoints
+usable outside the batch-evaluation pipeline. They allow MIDI prompts,
+checkpoint selection, sampling controls, iterative continuation, playback, and
+diagnostics for both model families. They do not replace formal listening
+evaluation, but they provide a practical inspection interface for future
+qualitative work.
+
+Overall, the thesis contributes a reproducible comparison workflow for symbolic
+music generation rather than only a single trained model. It shows how tokenizer
+choice, checkpoint selection, architecture, generation settings, and evaluation
+metrics interact in practice. The resulting evidence supports xLSTM as the
+strongest model under the current controlled setup, while also identifying clear
+future directions: larger-data training, broader Transformer tuning, stricter
+generation-length controls, and a structured human listening study.

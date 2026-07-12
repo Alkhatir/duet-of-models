@@ -1,0 +1,65 @@
+\section{Gradio Demo}
+
+The final project also includes interactive Gradio applications for testing the
+trained music generators outside the batch-evaluation pipeline
+\citep{abidGradioHassleFreeSharing2019}. Two app variants are implemented:
+\path{app/gradio_xlstm.py} for xLSTM checkpoints and
+\path{app/gradio_transformer.py} for the GPT-2-style and LLaMA-style
+Transformer checkpoints. The two interfaces intentionally expose the same
+workflow so that qualitative inspection is not tied to one model family.
+
+Both applications load the REMI+ tokenizer, tokenize a user-provided MIDI
+prompt, run autoregressive continuation, decode the resulting token sequence
+back to MIDI, and return the generated file for download and browser playback.
+The playback panel uses browser-native MIDI rendering, so the app does not need
+to synthesize audio files on the server. The main controls are the selected run,
+checkpoint, device, prompt MIDI, prompt-token window, number of new tokens,
+random seed, greedy decoding toggle, temperature, top-\(k\), top-\(p\), and a
+special-token blocking option. The app also reports generation diagnostics such
+as generated-token counts, token-category counts, common generated tokens,
+decoded-note counts, pitch range, and simple quality indicators.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{figures/gradio_xlstm.png}
+
+	\caption{Placeholder for the xLSTM Gradio demo. The final screenshot should show run selection, checkpoint selection, MIDI prompt upload, sampling controls, browser playback, and generation diagnostics.}
+	\label{fig:gradio-xlstm-placeholder}
+\end{figure}
+
+The xLSTM app uses the same adapter as the xLSTM generation pipeline. It
+discovers runs under \path{experiments/}, resolves \path{best/checkpoint.pt}
+by default, and can also load step checkpoints or the final checkpoint. The
+launcher is \path{scripts/gradio_xlstm.sh}; it accepts optional checkpoint,
+model-configuration, tokenizer-configuration, and output-directory arguments.
+The default output directory is
+\path{experiments/gradio_xlstm_generations}. Generated MIDI files are named with
+a timestamp so multiple interactive trials can be kept in the same folder.
+
+The Transformer app mirrors the xLSTM interface but loads Hugging Face
+\path{AutoModelForCausalLM} checkpoints \citep{wolfTransformersStateoftheArtNatural2020}.
+It treats the saved run root as the selected model written by
+\path{Trainer.save_model}, while \path{checkpoint-*} folders remain available
+for manual step-checkpoint inspection. When a run contains
+\path{metrics.json:test_checkpoint_path}, the app uses that recorded validation
+checkpoint as the default best-checkpoint selection. The launcher is
+\path{scripts/gradio_transformer.sh}; it accepts optional checkpoint-directory,
+model-configuration, tokenizer-configuration, and output-directory arguments.
+The default checkpoint directory is the GPT-2-style matched run root,
+\path{experiments/transformer-tok14-batch16-sched-decay8000/gpt2}, and the
+same launcher can be pointed to the LLaMA-style run root.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{figures/gradio_transformer.png}
+	\caption{Placeholder for the Transformer Gradio demo. The final screenshot should show the matched GPT-2-style or LLaMA-style run, selected checkpoint directory, MIDI prompt upload, sampling controls, browser playback, and generation diagnostics.}
+	\label{fig:gradio-transformer-placeholder}
+\end{figure}
+
+A continuation workflow is included in both app variants. After a MIDI file is
+generated, the user can copy that generated file into the continuation input and
+run generation again. In that mode, the app re-tokenizes the previous output,
+keeps the last \(N\) prompt tokens according to the prompt-token slider, and
+uses those tokens as the context for the next continuation. This makes it
+possible to iteratively extend a generated piece while keeping the same sampling
+controls and checkpoint selection.

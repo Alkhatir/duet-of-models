@@ -1,0 +1,94 @@
+\documentclass{article}
+
+\PassOptionsToPackage{numbers, compress}{natbib}
+\usepackage[creativeai,final]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[linesnumbered,ruled,vlined]{algorithm2e}
+
+\title{Comparative Symbolic Music Generation with xLSTM and Transformer Language Models}
+
+\author{%
+  Peer (Pierre) Hanna \\
+  Bachelor Thesis\\
+  \texttt{peerhanna501@gmail.com} \\ 
+  Institute of Computational Perception \\
+  Johannes Kepler University Linz \\
+  \texttt{Supervisor}: Prof. Gerhard Widmer\\ 
+  \texttt{Co-Supervisor}: PhD. Emmanouil Karystinaios
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+	This thesis investigates symbolic music generation as an autoregressive
+	sequence-modelling problem over MIDI-derived event tokens. Starting from the
+	matched subset of the Lakh MIDI Dataset, enriched with LastFM-derived tag
+	annotations, the project builds deterministic train, validation, and test
+	splits with explicit controls against metadata and content leakage. Music is
+	represented using a MidiTok REMI configuration with REMI+-style extensions,
+	allowing MIDI files to be converted into discrete token sequences suitable
+	for neural language modelling.
+
+	The work first develops and tunes an xLSTM-based generation pipeline, covering
+	preprocessing, tokenization, training, validation logging, checkpoint
+	selection, and generated-MIDI evaluation. The best derived xLSTM setup is then
+	used as the basis for a broader comparison with Transformer-based language
+	models, including GPT-2-style and LLaMA-style architectures trained under
+	matched data, tokenization, context-length, and evaluation conditions. In
+	addition to quantitative comparison across validation and test metrics, the
+	project develops a Gradio application for interactive music generation from
+	the trained models. The main contribution is a reproducible experimental
+	framework for comparing recurrent and Transformer sequence models for
+	symbolic music generation, together with a practical interface for exploring
+	their generated outputs.
+\end{abstract}
+
+\input{sections/introduction}
+
+\input{sections/dataset}
+
+\input{sections/preprocessing_pipeline}
+
+\input{sections/remi_plus_tokenization}
+
+\input{sections/model_architectures}
+
+\input{sections/training_setup}
+
+\input{sections/hyperparameter_search}
+
+\input{sections/model_selection}
+
+\input{sections/final_comparison_runs}
+
+\input{sections/gradio_demo}
+
+\input{sections/results}
+
+\input{sections/discussion}
+
+\input{sections/limitations}
+
+%\input{sections/future_work}
+
+\input{sections/conclusion}
+
+\input{sections/acknowledgement}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -49,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tok_cfg", required=True, help="Tokenizer YAML config.")
     parser.add_argument("--data_list", required=True, help="Text file containing MIDI paths.")
     parser.add_argument("--eval_cfg", default="configs/eval/generation_shared.yaml")
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Override eval config device, e.g. cuda, cuda:0, cpu, or auto.",
+    )
     parser.add_argument("--out_dir", required=True)
     return parser.parse_args()
 
@@ -102,6 +108,17 @@ def build_token_dataset(tokenizer, chunk_paths: list[Path], max_seq_len: int) ->
     )
 
 
+def tokenize_midi_path(tokenizer, midi_path: Path) -> list[int]:
+    tokenized = tokenizer(midi_path)
+    if isinstance(tokenized, list):
+        return [
+            token_id
+            for sequence in tokenized
+            for token_id in sequence.ids
+        ]
+    return list(tokenized.ids)
+
+
 def select_eval_samples(
     data_list_path: Path,
     tokenizer,
@@ -110,11 +127,17 @@ def select_eval_samples(
     max_seq_len: int,
 ) -> list[tuple[Path, Path, list[int]]]:
     midi_paths = load_midi_paths_from_list(data_list_path)
+    num_samples = int(eval_cfg.num_samples)
+    if str(eval_cfg.get("sample_mode", "chunks")) == "full_file_context":
+        Random(int(eval_cfg.seed)).shuffle(midi_paths)
+        selected_paths = midi_paths if num_samples <= 0 else midi_paths[:num_samples]
+        return [(midi_path, midi_path, []) for midi_path in selected_paths]
+
     split_name = str(eval_cfg.get("split", "test"))
     chunk_paths = build_eval_chunks(tokenizer, midi_paths, tok_cfg, max_seq_len, split_name)
     chunk_paths = sorted(chunk_paths)
     Random(int(eval_cfg.seed)).shuffle(chunk_paths)
-    selected_chunks = chunk_paths[: int(eval_cfg.num_samples)]
+    selected_chunks = chunk_paths if num_samples <= 0 else chunk_paths[:num_samples]
 
     dataset = build_token_dataset(tokenizer, selected_chunks, max_seq_len)
     samples: list[tuple[Path, Path, list[int]]] = []
@@ -194,6 +217,10 @@ def generate_continuation(
 
 
 def compute_prompt_length(token_ids: list[int], cfg: DictConfig) -> int:
+    if str(cfg.get("prompt_mode", "ratio")) == "max_context":
+        max_context = int(cfg.get("max_context_tokens", cfg.get("max_prompt_tokens", 1024)))
+        return max(1, min(max_context, len(token_ids) - 1))
+
     min_prompt = int(cfg.min_prompt_tokens)
     max_prompt = int(cfg.max_prompt_tokens)
     ratio_prompt = int(len(token_ids) * float(cfg.prompt_ratio))
@@ -207,6 +234,14 @@ def decode_ids_to_midi(tokenizer, token_ids: list[int], output_path: Path) -> No
     score = tokenizer.decode(TokSequence(ids=token_ids))
     if not output_path.exists():
         score.dump_midi(output_path)
+
+
+def sample_generated_midi_path(sample: GenerationSample, out_dir: Path, eval_cfg: DictConfig) -> Path:
+    output_cfg = eval_cfg.get("output", {})
+    if bool(output_cfg.get("flat_generated_midis", False)):
+        generated_dir = out_dir / str(output_cfg.get("generated_subdir", "generated_midis"))
+        return generated_dir / f"{sample.sample_id:04d}_{sample.source_path.stem}.mid"
+    return out_dir / "samples" / f"{sample.sample_id:04d}" / "generated.mid"
 
 
 def compute_repetition_4gram(token_ids: list[int]) -> float:
@@ -230,15 +265,43 @@ def save_json(path: Path, payload: Any) -> None:
         json.dump(payload, fh, indent=2, sort_keys=True)
 
 
+def load_completed_sample(sample_id: int, source_path: Path, out_dir: Path) -> dict[str, Any] | None:
+    sample_json_path = out_dir / "samples" / f"{sample_id:04d}" / "sample.json"
+    if not sample_json_path.is_file():
+        return None
+    try:
+        with sample_json_path.open("r", encoding="utf8") as fh:
+            record = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not record.get("decode_success"):
+        return None
+    generated_midi = record.get("generated_midi")
+    if not generated_midi or not Path(str(generated_midi)).is_file():
+        return None
+    if record.get("sample_id") != sample_id:
+        return None
+    if record.get("source_path") != str(source_path):
+        return None
+    return record
+
+
 def write_generation_sample(
     sample: GenerationSample,
     tokenizer,
     out_dir: Path,
+    eval_cfg: DictConfig,
+    generation_seconds: float | None = None,
 ) -> dict[str, Any]:
+    decode_start_time = time.perf_counter()
+    output_cfg = eval_cfg.get("output", {})
+    copy_reference_midi = bool(output_cfg.get("copy_reference_midi", True))
+    write_prompt_midi = bool(output_cfg.get("write_prompt_midi", True))
+
     sample_dir = out_dir / "samples" / f"{sample.sample_id:04d}"
     prompt_path = sample_dir / "prompt.mid"
     reference_path = sample_dir / "reference.mid"
-    generated_path = sample_dir / "generated.mid"
+    generated_path = sample_generated_midi_path(sample, out_dir, eval_cfg)
     result: dict[str, Any] = {
         "sample_id": sample.sample_id,
         "source_path": str(sample.source_path),
@@ -249,20 +312,31 @@ def write_generation_sample(
         "repetition_4gram": compute_repetition_4gram(sample.generated_ids[sample.prompt_length :]),
         "decode_success": False,
     }
+    if generation_seconds is not None:
+        result["generation_seconds"] = generation_seconds
+        result["tokens_per_second"] = sample.generated_length / max(generation_seconds, 1e-12)
     try:
-        decode_ids_to_midi(tokenizer, sample.prompt_ids, prompt_path)
-        decode_ids_to_midi(tokenizer, sample.reference_ids, reference_path)
+        if write_prompt_midi:
+            decode_ids_to_midi(tokenizer, sample.prompt_ids, prompt_path)
+            result["prompt_midi"] = str(prompt_path)
+        if copy_reference_midi:
+            decode_ids_to_midi(tokenizer, sample.reference_ids, reference_path)
+            result["reference_midi"] = str(reference_path)
+        else:
+            result["reference_midi"] = str(sample.source_path)
         decode_ids_to_midi(tokenizer, sample.generated_ids, generated_path)
         result.update(
             {
                 "decode_success": True,
-                "prompt_midi": str(prompt_path),
-                "reference_midi": str(reference_path),
                 "generated_midi": str(generated_path),
             }
         )
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    decode_seconds = time.perf_counter() - decode_start_time
+    result["decode_seconds"] = decode_seconds
+    if generation_seconds is not None:
+        result["total_sample_seconds"] = generation_seconds + decode_seconds
     save_json(
         sample_dir / "sample.json",
         {
@@ -286,6 +360,12 @@ def run_sample_generation(
 ) -> None:
     args = parse_args() if args is None else args
     eval_cfg = load_eval_config(args.eval_cfg)
+    if args.device is not None:
+        eval_cfg.device = args.device
+    seed = int(eval_cfg.get("seed", 42))
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     save_json(out_dir / "eval_config.resolved.json", OmegaConf.to_container(eval_cfg, resolve=True))
@@ -303,6 +383,13 @@ def run_sample_generation(
 
     tokenizer = MidiTokBuilder.from_yaml(args.tok_cfg).to_MidiTok()
     device = resolve_device(eval_cfg)
+    print(
+        "Generation device: "
+        f"{device} "
+        f"(torch.cuda.is_available={torch.cuda.is_available()}, "
+        f"torch.cuda.device_count={torch.cuda.device_count()})",
+        flush=True,
+    )
     checkpoint_path = Path(args.checkpoint)
     model_cfg_path = Path(args.model_cfg)
     adapter = adapter_factory(
@@ -311,6 +398,7 @@ def run_sample_generation(
         tokenizer_vocab_size=len(tokenizer),
         device=device,
     )
+    eval_cfg.max_context_tokens = adapter.max_context_length
     samples = select_eval_samples(
         data_list_path=Path(args.data_list),
         tokenizer=tokenizer,
@@ -322,22 +410,41 @@ def run_sample_generation(
 
     records: list[dict[str, Any]] = []
     for sample_id, (source_path, chunk_path, token_ids) in enumerate(samples):
+        completed_record = load_completed_sample(
+            sample_id=sample_id,
+            source_path=source_path,
+            out_dir=out_dir,
+        )
+        if completed_record is not None:
+            records.append(completed_record)
+            print(f"Skipping completed sample {sample_id:04d}: {source_path}", flush=True)
+            continue
+        if not token_ids and str(eval_cfg.get("sample_mode", "chunks")) == "full_file_context":
+            token_ids = tokenize_midi_path(tokenizer, source_path)
         if len(token_ids) < max(int(eval_cfg.min_prompt_tokens) + 1, 2):
             continue
         prompt_length = compute_prompt_length(token_ids, eval_cfg)
-        generation_limit = min(
-            len(token_ids) - prompt_length,
-            int(eval_cfg.max_generation_tokens),
-        )
+        reference_remaining = len(token_ids) - prompt_length
+        if str(eval_cfg.get("generation_length", "capped_reference")) == "reference":
+            generation_limit = reference_remaining
+            generation_eos_token_id = None
+        else:
+            generation_limit = min(
+                reference_remaining,
+                int(eval_cfg.max_generation_tokens),
+            )
+            generation_eos_token_id = eos_token_id
         prompt_ids = token_ids[:prompt_length]
         reference_full_ids = token_ids[: prompt_length + generation_limit]
+        generation_start_time = time.perf_counter()
         continuation_ids = generate_continuation(
             adapter=adapter,
             prompt_ids=prompt_ids,
             max_new_tokens=generation_limit,
             cfg=eval_cfg,
-            eos_token_id=eos_token_id,
+            eos_token_id=generation_eos_token_id,
         )
+        generation_seconds = time.perf_counter() - generation_start_time
         generated_full_ids = prompt_ids + continuation_ids
         sample = GenerationSample(
             sample_id=sample_id,
@@ -355,17 +462,36 @@ def run_sample_generation(
                 sample=sample,
                 tokenizer=tokenizer,
                 out_dir=out_dir,
+                eval_cfg=eval_cfg,
+                generation_seconds=generation_seconds,
             )
         )
 
+    timed_records = [
+        record
+        for record in records
+        if isinstance(record.get("generation_seconds"), (int, float))
+    ]
+    generated_tokens_timed = sum(int(record.get("generated_length", 0)) for record in timed_records)
+    total_generation_seconds = sum(float(record["generation_seconds"]) for record in timed_records)
+    total_decode_seconds = sum(
+        float(record.get("decode_seconds", 0.0))
+        for record in records
+        if isinstance(record.get("decode_seconds"), (int, float))
+    )
     summary = {
         "model_type": model_type,
         "checkpoint": str(checkpoint_path),
         "num_samples": len(records),
         "decode_success_count": sum(1 for record in records if record.get("decode_success")),
         "decode_failure_count": sum(1 for record in records if not record.get("decode_success")),
+        "timed_sample_count": len(timed_records),
+        "total_generation_seconds": total_generation_seconds,
+        "total_decode_seconds": total_decode_seconds,
+        "generated_tokens_timed": generated_tokens_timed,
     }
     summary["decode_success_rate"] = summary["decode_success_count"] / max(len(records), 1)
+    summary["tokens_per_second"] = generated_tokens_timed / max(total_generation_seconds, 1e-12)
     save_json(out_dir / "generation_summary.json", summary)
     save_json(out_dir / "generation_samples.json", records)
 

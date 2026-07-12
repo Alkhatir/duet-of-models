@@ -1,0 +1,21 @@
+seed: 42
+split: test
+num_samples: 0
+sample_mode: full_file_context
+prompt_mode: max_context
+generation_length: reference
+prompt_ratio: 0.5
+min_prompt_tokens: 1
+max_prompt_tokens: 1024
+max_generation_tokens: 512
+device: auto
+metrics_config: data_reports/evaluation/muspy_testset_reference_20260708/music_metrics_muspy_only.yaml
+sampling:
+  greedy: false
+  temperature: 1.0
+  top_k: 50
+  top_p: 0.95
+wandb:
+  enabled: false
+  project: duet-of-models
+  run_name: null

@@ -1,0 +1,107 @@
+\section{Model Architectures}
+
+All models in this thesis are trained as autoregressive language models over
+the same REMI+-style token sequences. The architectural comparison therefore
+does not change the prediction task: each model receives a fixed-length context
+of token IDs and predicts the next token. The main difference is the sequence
+model used to represent that context. The repository contains one recurrent
+xLSTM family and two Transformer-based families, a GPT-2-style decoder and a
+LLaMA-style decoder, all configured through YAML files under
+\verb|configs/model/|.
+
+The training code fills corpus-dependent values from the active tokenizer and
+training configuration at runtime. For xLSTM, \verb|vocab_size| is read from the
+tokenizer and \verb|context_length| is read from the data block size. For the
+Transformer models, the same process fills \verb|vocab_size| and
+\verb|max_position_embeddings|. This keeps the model configuration files focused
+on architectural parameters while ensuring that the compared models use the same
+token vocabulary and context length.
+
+\subsection{xLSTM}
+
+xLSTM \citep{beckXLSTMExtendedLong2024} extends the LSTM
+\citep{hochreiterLongShortTermMemory1997} family with exponential gating and
+modified scalar and matrix memory structures designed for scalable language
+modeling. The implementation provided by
+NXAI\footnote{\url{https://github.com/nx-ai/xlstm}} uses the \verb|xlstm|
+package's \verb|xLSTMLMModel| as an autoregressive language model over REMI+
+token IDs.
+
+The repository defines a simple xLSTM scaling ladder in
+\verb|configs/model/xlstm/|:
+\begin{itemize}
+	\item \verb|basic|: embedding dimension 128, 4 blocks, one sLSTM block;
+	\item \verb|small|: embedding dimension 192, 6 blocks, two sLSTM blocks;
+	\item \verb|base|: embedding dimension 256, 8 blocks, three sLSTM blocks;
+	\item \verb|medium|: embedding dimension 384, 10 blocks, three sLSTM blocks and 8 heads.
+\end{itemize}
+
+The common design keeps the general recipe fixed and scales mainly through embedding dimension and number of blocks. The mLSTM and sLSTM sub-blocks use a 1D convolution kernel size of 4. The small/base configurations use 4 heads; the medium configuration uses 8 heads. sLSTM feedforward layers use a projection factor of 1.3 and GELU activation. The CUDA sLSTM backend is used in the GPU-oriented configs, while a CPU-compatible basic config exists separately.
+
+\begin{table}[htbp]
+	\centering
+	\begin{tabular}{lrrrr}
+		\toprule
+		Config & Embedding dim. & Blocks & sLSTM positions & Approx. params \\
+		\midrule
+		basic  & 128            & 4      & [1]             & 0.64M          \\
+		small  & 192            & 6      & [1, 4]          & 1.70M          \\
+		base   & 256            & 8      & [1, 3, 5]       & 3.77M          \\
+		medium & 384            & 10     & [1, 4, 7]       & 9.28M          \\
+		\bottomrule
+	\end{tabular}
+	\caption{xLSTM scaling ladder from \texttt{configs/model/xlstm/README.md}.}
+	\label{tab:xlstm_scale}
+
+\end{table}
+
+The current completed experiment summaries show 1,628,384 trainable parameters for the \verb|small| run, 3,671,080 trainable parameters for the \verb|base| runs with tokenizer 11 and 9,278,320 trainable parameters for the \verb|medium| run with tokenizer 14.  These values differ slightly from the rounded README estimates because the tokenizer vocabulary size is filled in at runtime and determines the sizes of the token embedding and final language-model head.
+
+\subsection{Transformer Baselines}
+
+The Transformer models use the Hugging Face Transformers implementation
+\citep{wolfTransformersStateoftheArtNatural2020}.
+They are initialized from
+configuration rather than from pretrained weights, so the comparison measures
+architectural behaviour under the repository's symbolic-music training setup
+instead of transfer from natural-language pretraining. Both Transformer configs
+use tokenizer 14, a vocabulary size of 646 tokens after runtime resolution, a
+maximum context length of 1024 tokens, hidden size 256, 4 decoder layers, and 8
+attention heads.
+
+The GPT-2-style model follows a decoder-only Transformer language-model design
+based on GPT-2 \citep{radfordLanguageModelsAre}. In the repository it is
+configured by the tokenizer-14 GPT-2 match YAML with \verb|architecture: gpt2|.
+The training code maps the shared hidden-size, layer-count, and attention-head
+settings to the corresponding Hugging Face \verb|GPT2Config| fields
+\verb|n_embd|, \verb|n_layer|, and \verb|n_head|.
+
+The LLaMA-style model is configured by the tokenizer-14 LLaMA match YAML with
+\verb|architecture: llama| and follows the LLaMA decoder family
+\citep{touvronLLaMAOpenEfficient2023}. It uses the same hidden size, number of
+layers, and number of attention heads as the GPT-2-style model, but is built
+with \verb|LlamaConfig|. The matched configuration adds an intermediate
+feedforward size of 768 and uses \verb|rope_theta = 1000000.0| for rotary
+positional encoding. This makes it a compact LLaMA-style decoder adapted to the
+same symbolic-music token stream rather than a pretrained LLaMA checkpoint.
+
+\begin{table}[htbp]
+	\centering
+	\begin{tabular}{lrrrrrr}
+		\toprule
+		Config & Architecture & Hidden dim. & Layers & Heads & Context & Params \\
+		\midrule
+		\verb|tok_14_gpt2_match|  & GPT-2-style  & 256 & 4 & 8 & 1024 & 3.59M \\
+		\verb|tok_14_llama_match| & LLaMA-style  & 256 & 4 & 8 & 1024 & 3.74M \\
+		\bottomrule
+	\end{tabular}
+	\caption{Matched Transformer model configurations used for comparison with the selected xLSTM setup. Parameter counts are computed from the instantiated Hugging Face models with tokenizer 14.}
+	\label{tab:transformer_model_configs}
+\end{table}
+
+The two Transformer baselines are intentionally close in scale to the selected
+base xLSTM condition. The base xLSTM tokenizer-14 run has about 3.70M trainable
+parameters, while the matched GPT-2-style and LLaMA-style models have about
+3.59M and 3.74M trainable parameters respectively. This makes the comparison
+less dependent on raw parameter count and more focused on the modelling
+differences between recurrent xLSTM blocks and Transformer self-attention.

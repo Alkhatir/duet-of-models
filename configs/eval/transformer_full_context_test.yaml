@@ -1,0 +1,26 @@
+seed: 42
+split: test
+num_samples: 0
+sample_mode: full_file_context
+prompt_mode: max_context
+generation_length: reference
+prompt_ratio: 0.5
+min_prompt_tokens: 1
+max_prompt_tokens: 1024
+max_generation_tokens: 512
+device: auto
+metrics_config: configs/eval/music_metrics.yaml
+output:
+  flat_generated_midis: true
+  generated_subdir: generated_midis
+  copy_reference_midi: false
+  write_prompt_midi: true
+sampling:
+  greedy: false
+  temperature: 1.0
+  top_k: 50
+  top_p: 0.95
+wandb:
+  enabled: false
+  project: duet-of-models
+  run_name: null
